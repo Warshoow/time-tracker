@@ -83,6 +83,35 @@ const saveState = (state) => {
   }
 };
 
+// ---------- TimePicker (select avec créneaux pré-générés) ----------
+function TimePicker({ value, onChange, min = "00:00", max = "23:45", step = 15 }) {
+  const options = useMemo(() => {
+    const a = minutesFromHHMM(min);
+    const b = minutesFromHHMM(max);
+    const arr = [];
+    for (let m = a; m <= b; m += step) arr.push(hhmmFromMinutes(m));
+    if (value && !arr.includes(value)) {
+      arr.push(value);
+      arr.sort();
+    }
+    return arr;
+  }, [min, max, step, value]);
+
+  return (
+    <select
+      className="select"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {options.map((t) => (
+        <option key={t} value={t}>
+          {t}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // ---------- App ----------
 export default function TimeTracker() {
   const [loaded, setLoaded] = useState(false);
@@ -167,6 +196,28 @@ export default function TimeTracker() {
     return days.reduce((acc, d) => acc + (totalsByDay[fmtDateKey(d)] || 0), 0);
   }, [days, totalsByDay]);
 
+  // Récap projet × jour (uniquement les projets actifs cette semaine)
+  const recap = useMemo(() => {
+    const dayKeys = days.map(fmtDateKey);
+    return projects
+      .map((p) => {
+        const perDay = dayKeys.map((k) =>
+          entries
+            .filter((e) => e.projectId === p.id && e.date === k)
+            .reduce(
+              (acc, e) =>
+                acc +
+                Math.max(0, minutesFromHHMM(e.end) - minutesFromHHMM(e.start)),
+              0
+            )
+        );
+        const total = perDay.reduce((a, b) => a + b, 0);
+        return { project: p, perDay, total };
+      })
+      .filter((r) => r.total > 0)
+      .sort((a, b) => b.total - a.total);
+  }, [projects, entries, days]);
+
   const projectColor = (id) => {
     const idx = projects.findIndex((p) => p.id === id);
     return PROJECT_COLORS[idx % PROJECT_COLORS.length] || PROJECT_COLORS[0];
@@ -220,7 +271,7 @@ export default function TimeTracker() {
   };
 
   // ----- Resize entries by dragging top/bottom edges -----
-  const SNAP_MIN = 5;
+  const SNAP_MIN = 15;
 
   const startResize = (ev, entry, edge) => {
     ev.stopPropagation();
@@ -483,7 +534,10 @@ export default function TimeTracker() {
             flexDirection: "column",
             gap: 28,
             overflowY: "auto",
-            maxHeight: "100vh",
+            position: "sticky",
+            top: 0,
+            alignSelf: "start",
+            height: "100vh",
           }}
         >
           {/* Logo / titre */}
@@ -586,26 +640,24 @@ export default function TimeTracker() {
                   <label className="label" style={{ fontSize: 10 }}>
                     Début
                   </label>
-                  <input
-                    type="time"
-                    className="input"
+                  <TimePicker
                     value={form.start}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, start: e.target.value }))
-                    }
+                    onChange={(v) => setForm((f) => ({ ...f, start: v }))}
+                    min={settings.dayStart}
+                    max={settings.dayEnd}
+                    step={15}
                   />
                 </div>
                 <div>
                   <label className="label" style={{ fontSize: 10 }}>
                     Fin
                   </label>
-                  <input
-                    type="time"
-                    className="input"
+                  <TimePicker
                     value={form.end}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, end: e.target.value }))
-                    }
+                    onChange={(v) => setForm((f) => ({ ...f, end: v }))}
+                    min={settings.dayStart}
+                    max={settings.dayEnd}
+                    step={15}
                   />
                 </div>
               </div>
@@ -1049,6 +1101,200 @@ export default function TimeTracker() {
               );
             })}
           </div>
+
+          {/* ========== Récap par projet ========== */}
+          {recap.length > 0 && (
+            <div
+              style={{
+                marginTop: 18,
+                border: "1px solid #2a262020",
+                borderRadius: 3,
+                background: "rgba(255, 252, 245, 0.5)",
+                padding: "16px 20px",
+                flexShrink: 0,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                  marginBottom: 12,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: "0.2em",
+                    textTransform: "uppercase",
+                    color: "#2a262099",
+                  }}
+                >
+                  Répartition par projet
+                </div>
+                <div
+                  className="mono"
+                  style={{ fontSize: 11, color: "#2a262080" }}
+                >
+                  {recap.length} projet{recap.length > 1 ? "s" : ""} actif
+                  {recap.length > 1 ? "s" : ""}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "minmax(140px, 1.4fr) repeat(5, 1fr) 90px",
+                  rowGap: 6,
+                  columnGap: 12,
+                  alignItems: "center",
+                  fontSize: 12,
+                }}
+              >
+                {/* Header */}
+                <div />
+                {days.map((d) => {
+                  const isToday = fmtDateKey(d) === todayKey;
+                  return (
+                    <div
+                      key={fmtDateKey(d)}
+                      className="mono"
+                      style={{
+                        fontSize: 10,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.15em",
+                        color: isToday ? "#c9472b" : "#2a262099",
+                        textAlign: "right",
+                      }}
+                    >
+                      {fmtDayLabel(d)} {fmtDayNum(d)}
+                    </div>
+                  );
+                })}
+                <div
+                  className="mono"
+                  style={{
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.15em",
+                    color: "#2a262099",
+                    textAlign: "right",
+                  }}
+                >
+                  Total
+                </div>
+
+                {/* Lignes par projet */}
+                {recap.map(({ project, perDay, total }) => {
+                  const c = projectColor(project.id);
+                  return (
+                    <React.Fragment key={project.id}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          minWidth: 0,
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            background: c.bg,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            fontSize: 13,
+                          }}
+                        >
+                          {project.name}
+                        </span>
+                      </div>
+                      {perDay.map((m, i) => (
+                        <div
+                          key={i}
+                          className="mono"
+                          style={{
+                            textAlign: "right",
+                            fontSize: 11,
+                            color: m > 0 ? "#2a2620" : "#2a262040",
+                          }}
+                        >
+                          {m > 0 ? fmtDuration(m) : "—"}
+                        </div>
+                      ))}
+                      <div
+                        className="mono"
+                        style={{
+                          textAlign: "right",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: c.bg,
+                        }}
+                      >
+                        {fmtDuration(total)}
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+
+                {/* Ligne total jour */}
+                <div
+                  style={{
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.15em",
+                    color: "#2a262099",
+                    paddingTop: 8,
+                    borderTop: "1px solid #2a262020",
+                    marginTop: 4,
+                  }}
+                >
+                  Total jour
+                </div>
+                {days.map((d) => {
+                  const dt = totalsByDay[fmtDateKey(d)] || 0;
+                  return (
+                    <div
+                      key={fmtDateKey(d)}
+                      className="mono"
+                      style={{
+                        textAlign: "right",
+                        fontSize: 11,
+                        paddingTop: 8,
+                        borderTop: "1px solid #2a262020",
+                        marginTop: 4,
+                        color: dt > 0 ? "#2a2620" : "#2a262040",
+                      }}
+                    >
+                      {dt > 0 ? fmtDuration(dt) : "—"}
+                    </div>
+                  );
+                })}
+                <div
+                  className="mono"
+                  style={{
+                    textAlign: "right",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    paddingTop: 8,
+                    borderTop: "1px solid #2a262020",
+                    marginTop: 4,
+                  }}
+                >
+                  {fmtDuration(weekTotal)}
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1081,24 +1327,22 @@ export default function TimeTracker() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <label className="label">Début</label>
-                <input
-                  type="time"
-                  className="input"
+                <TimePicker
                   value={settings.dayStart}
-                  onChange={(e) =>
-                    setSettings((s) => ({ ...s, dayStart: e.target.value }))
-                  }
+                  onChange={(v) => setSettings((s) => ({ ...s, dayStart: v }))}
+                  min="00:00"
+                  max="23:30"
+                  step={30}
                 />
               </div>
               <div>
                 <label className="label">Fin</label>
-                <input
-                  type="time"
-                  className="input"
+                <TimePicker
                   value={settings.dayEnd}
-                  onChange={(e) =>
-                    setSettings((s) => ({ ...s, dayEnd: e.target.value }))
-                  }
+                  onChange={(v) => setSettings((s) => ({ ...s, dayEnd: v }))}
+                  min="00:30"
+                  max="23:30"
+                  step={30}
                 />
               </div>
             </div>
