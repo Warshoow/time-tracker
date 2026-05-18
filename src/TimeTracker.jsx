@@ -51,6 +51,9 @@ const fmtDuration = (mins) => {
   return `${m}min`;
 };
 
+// Durées proposées dans le modal d'ajout (en minutes)
+const DURATION_OPTIONS = [15, 30, 45, 60, 75, 90, 120, 150, 180, 240];
+
 // Palette de couleurs pour les projets (assignée automatiquement)
 const PROJECT_COLORS = [
   { bg: "#c9472b", soft: "#f4d9d1" }, // terracotta
@@ -134,6 +137,12 @@ export default function TimeTracker() {
 
   // Resize drag state: { id, edge: "top"|"bottom", startY, origStart, origEnd } | null
   const [resizing, setResizing] = useState(null);
+
+  // Add-entry modal state: { date, projectId, title, start, end } | null
+  const [addModal, setAddModal] = useState(null);
+
+  // Position survol pour ligne d'aide (clic droit) : { dayKey, minutes } | null
+  const [hoverPos, setHoverPos] = useState(null);
 
   // ----- Load on mount -----
   useEffect(() => {
@@ -323,6 +332,49 @@ export default function TimeTracker() {
     };
   }, [resizing, pxPerMin, dayStartMin, dayEndMin]);
 
+  // ----- Add-entry modal (déclenché par clic droit sur un jour) -----
+  const openAddModal = (date, mins) => {
+    const startMin = Math.max(
+      dayStartMin,
+      Math.min(mins, dayEndMin - SNAP_MIN)
+    );
+    const endMin = Math.min(startMin + 60, dayEndMin);
+    setHoverPos(null);
+    setAddModal({
+      date,
+      projectId: form.projectId || projects[0]?.id || "",
+      title: "",
+      start: hhmmFromMinutes(startMin),
+      end: hhmmFromMinutes(endMin),
+    });
+  };
+
+  const submitAddModal = () => {
+    if (!addModal) return;
+    if (!addModal.projectId) {
+      alert("Sélectionne un projet.");
+      return;
+    }
+    const s = minutesFromHHMM(addModal.start);
+    const e = minutesFromHHMM(addModal.end);
+    if (e <= s) {
+      alert("L'heure de fin doit être après l'heure de début.");
+      return;
+    }
+    setEntries((arr) => [
+      ...arr,
+      {
+        id: `e_${Date.now()}`,
+        projectId: addModal.projectId,
+        date: addModal.date,
+        start: addModal.start,
+        end: addModal.end,
+        title: addModal.title.trim(),
+      },
+    ]);
+    setAddModal(null);
+  };
+
   const goPrevWeek = () => setWeekStart((d) => addDays(d, -7));
   const goNextWeek = () => setWeekStart((d) => addDays(d, 7));
   const goToday = () => {
@@ -469,6 +521,14 @@ export default function TimeTracker() {
           transform: translateY(-1px);
           box-shadow: 0 4px 12px rgba(42, 38, 32, 0.15);
           z-index: 5;
+        }
+        .entry-block.entry-compact {
+          display: flex;
+          align-items: center;
+          padding: 0 8px;
+        }
+        .entry-block.entry-inline {
+          padding: 4px 8px;
         }
         .entry-block .resize-handle {
           position: absolute;
@@ -998,7 +1058,76 @@ export default function TimeTracker() {
                     gridRow: "2",
                   }}
                 >
-                  <div style={{ position: "relative", height: (totalMin / 60) * HOUR_HEIGHT }}>
+                  <div
+                    style={{ position: "relative", height: (totalMin / 60) * HOUR_HEIGHT }}
+                    onContextMenu={(ev) => {
+                      ev.preventDefault();
+                      const rect = ev.currentTarget.getBoundingClientRect();
+                      const y = ev.clientY - rect.top;
+                      const mins =
+                        dayStartMin +
+                        Math.round(y / pxPerMin / SNAP_MIN) * SNAP_MIN;
+                      openAddModal(key, mins);
+                    }}
+                    onMouseMove={(ev) => {
+                      if (resizing) return;
+                      const rect = ev.currentTarget.getBoundingClientRect();
+                      const y = ev.clientY - rect.top;
+                      const snapped =
+                        dayStartMin +
+                        Math.round(y / pxPerMin / SNAP_MIN) * SNAP_MIN;
+                      const clamped = Math.max(
+                        dayStartMin,
+                        Math.min(snapped, dayEndMin)
+                      );
+                      setHoverPos((prev) => {
+                        if (
+                          prev &&
+                          prev.dayKey === key &&
+                          prev.minutes === clamped
+                        )
+                          return prev;
+                        return { dayKey: key, minutes: clamped };
+                      });
+                    }}
+                    onMouseLeave={() => setHoverPos(null)}
+                  >
+                    {/* Ligne d'aide au survol (indique où le clic droit va atterrir) */}
+                    {hoverPos &&
+                      hoverPos.dayKey === key &&
+                      !resizing &&
+                      !addModal && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            right: 0,
+                            top:
+                              (hoverPos.minutes - dayStartMin) * pxPerMin,
+                            borderTop: "1px dashed #c9472b",
+                            pointerEvents: "none",
+                            zIndex: 4,
+                          }}
+                        >
+                          <span
+                            className="mono"
+                            style={{
+                              position: "absolute",
+                              left: 4,
+                              top: -8,
+                              fontSize: 10,
+                              color: "#c9472b",
+                              background: "#f5efe6",
+                              padding: "0 4px",
+                              borderRadius: 2,
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {hhmmFromMinutes(hoverPos.minutes)}
+                          </span>
+                        </div>
+                      )}
+
                     {/* Hour grid lines */}
                     {hourLines.map((h) => {
                       const top = (h * 60 - dayStartMin) * pxPerMin;
@@ -1021,18 +1150,52 @@ export default function TimeTracker() {
                     {dayEntries.map((e) => {
                       const s = minutesFromHHMM(e.start);
                       const en = minutesFromHHMM(e.end);
+                      const dur = en - s;
                       const top = Math.max(0, (s - dayStartMin) * pxPerMin);
-                      const height = Math.max(18, (en - s) * pxPerMin - 2);
+                      const height = Math.max(18, dur * pxPerMin - 2);
                       const c = projectColor(e.projectId);
                       const proj = projectById(e.projectId);
                       const col = placement.get(e.id) || 0;
                       const widthPct = 100 / columns;
                       const leftPct = col * widthPct;
+                      const layoutMode =
+                        dur <= 15 ? "compact" : dur < 60 ? "inline" : "full";
+
+                      const headerLine = (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            paddingRight: 16,
+                            width: "100%",
+                          }}
+                        >
+                          <span style={{ fontWeight: 600, color: c.bg }}>
+                            {proj?.name || "—"}
+                          </span>
+                          {e.title && (
+                            <span style={{ opacity: 0.75, marginLeft: 6 }}>
+                              · {e.title}
+                            </span>
+                          )}
+                        </div>
+                      );
+
+                      const timeLine = (
+                        <div
+                          className="mono"
+                          style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}
+                        >
+                          {e.start}–{e.end}
+                        </div>
+                      );
 
                       return (
                         <div
                           key={e.id}
-                          className="entry-block fade-in"
+                          className={`entry-block entry-${layoutMode} fade-in`}
                           style={{
                             top,
                             height,
@@ -1042,6 +1205,10 @@ export default function TimeTracker() {
                             borderLeftColor: c.bg,
                           }}
                           onClick={(ev) => ev.stopPropagation()}
+                          onContextMenu={(ev) => {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                          }}
                         >
                           <div
                             className="resize-handle resize-top"
@@ -1060,39 +1227,48 @@ export default function TimeTracker() {
                           >
                             <X size={11} />
                           </button>
-                          <div
-                            style={{
-                              fontWeight: 600,
-                              fontSize: 11,
-                              color: c.bg,
-                              marginBottom: 1,
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              paddingRight: 16,
-                            }}
-                          >
-                            {proj?.name || "—"}
-                          </div>
-                          {e.title && (
-                            <div
-                              style={{
-                                fontSize: 11,
-                                opacity: 0.85,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {e.title}
-                            </div>
+
+                          {layoutMode === "compact" && headerLine}
+
+                          {layoutMode === "inline" && (
+                            <>
+                              {headerLine}
+                              {timeLine}
+                            </>
                           )}
-                          <div
-                            className="mono"
-                            style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}
-                          >
-                            {e.start}–{e.end}
-                          </div>
+
+                          {layoutMode === "full" && (
+                            <>
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  fontSize: 11,
+                                  color: c.bg,
+                                  marginBottom: 1,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  paddingRight: 16,
+                                }}
+                              >
+                                {proj?.name || "—"}
+                              </div>
+                              {e.title && (
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    opacity: 0.85,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {e.title}
+                                </div>
+                              )}
+                              {timeLine}
+                            </>
+                          )}
                         </div>
                       );
                     })}
@@ -1412,6 +1588,157 @@ export default function TimeTracker() {
               </button>
               <button className="btn btn-primary" onClick={addProject}>
                 Créer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== Add-entry modal (clic droit) ========== */}
+      {addModal && (
+        <div className="modal-overlay" onClick={() => setAddModal(null)}>
+          <div className="modal" onClick={(ev) => ev.stopPropagation()}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
+              <h3
+                className="display"
+                style={{ margin: 0, fontSize: 22, fontWeight: 500 }}
+              >
+                Nouvelle entrée
+              </h3>
+              <button
+                className="btn-icon"
+                style={{ border: "none" }}
+                onClick={() => setAddModal(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 22 }}>
+              <div
+                style={{
+                  fontSize: 10,
+                  letterSpacing: "0.18em",
+                  textTransform: "uppercase",
+                  color: "#2a262099",
+                  marginBottom: 4,
+                }}
+              >
+                {new Date(addModal.date + "T00:00:00").toLocaleDateString(
+                  "fr-FR",
+                  { weekday: "long", day: "numeric", month: "long" }
+                )}
+              </div>
+              <div
+                className="display"
+                style={{
+                  fontSize: 32,
+                  fontWeight: 500,
+                  lineHeight: 1.1,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                {addModal.start}
+                <span style={{ color: "#2a262050", margin: "0 8px" }}>→</span>
+                {addModal.end}
+                <span
+                  className="mono"
+                  style={{
+                    fontSize: 12,
+                    color: "#2a262080",
+                    marginLeft: 10,
+                    fontWeight: 400,
+                  }}
+                >
+                  {fmtDuration(
+                    Math.max(
+                      0,
+                      minutesFromHHMM(addModal.end) -
+                        minutesFromHHMM(addModal.start)
+                    )
+                  )}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label className="label">Projet</label>
+                <select
+                  className="select"
+                  value={addModal.projectId}
+                  onChange={(ev) =>
+                    setAddModal((m) => ({ ...m, projectId: ev.target.value }))
+                  }
+                >
+                  <option value="">— choisir —</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="label">Tâche (optionnel)</label>
+                <input
+                  className="input"
+                  autoFocus
+                  placeholder="ex. revue PR, daily…"
+                  value={addModal.title}
+                  onChange={(ev) =>
+                    setAddModal((m) => ({ ...m, title: ev.target.value }))
+                  }
+                />
+              </div>
+
+              <div>
+                <label className="label">Durée</label>
+                <select
+                  className="select"
+                  value={
+                    minutesFromHHMM(addModal.end) -
+                    minutesFromHHMM(addModal.start)
+                  }
+                  onChange={(ev) => {
+                    const durMin = Number(ev.target.value);
+                    setAddModal((m) => {
+                      const startMin = minutesFromHHMM(m.start);
+                      const endMin = Math.min(startMin + durMin, dayEndMin);
+                      return { ...m, end: hhmmFromMinutes(endMin) };
+                    });
+                  }}
+                >
+                  {DURATION_OPTIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {fmtDuration(d)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginTop: 22,
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+              }}
+            >
+              <button className="btn" onClick={() => setAddModal(null)}>
+                Annuler
+              </button>
+              <button className="btn btn-primary" onClick={submitAddModal}>
+                <Plus size={14} /> Ajouter
               </button>
             </div>
           </div>
