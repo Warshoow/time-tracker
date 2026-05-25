@@ -39,6 +39,34 @@ Récap des fonctionnalités livrées depuis l'init du projet, groupées par thè
 - `vite.config.js` : `base: '/time-tracker/'` en build, `/` en dev (pour ne pas casser `npm run dev`)
 - Instructions setup dans `README.md` (activer Pages → Source: GitHub Actions une seule fois)
 
+## Refactor structure
+
+- Split du monolithe `TimeTracker.jsx` (1979 lignes) en **17 fichiers** :
+  - `lib/date.js`, `lib/storage.js`, `lib/constants.js`, `lib/jira.js`
+  - `styles.css` extrait du `<style>` inline JSX
+  - `components/` : `TimePicker`, `Sidebar`, `Calendar`, `DayColumn`, `EntryBlock`, `HoverGuide`, `RecapPanel`
+  - `components/modals/` : `SettingsModal`, `ProjectModal`, `AddEntryModal`
+- État centralisé dans le root (`TimeTracker.jsx`, ~480 lignes), composants enfants en mode "dumb" (props + callbacks)
+- Pas de Context : prop drilling assumé à cette échelle
+- Helpers de couleur projet dupliqués localement dans chaque consommateur plutôt que de passer des fonctions en props
+- Behavior strictement préservé (no-op fonctionnel)
+
+## Jira — Phase 2 (push réel via proxy serverless)
+
+- **Proxy** dans [`proxy/`](proxy/) — Express + Docker, prêt pour Dokploy
+  - `POST /api/jira-worklog` → forward vers `/rest/api/3/issue/{key}/worklog`
+  - `GET /healthz` pour Dokploy healthcheck
+  - ADF (Atlassian Document Format) géré pour le comment
+  - CORS multi-origines via env `ALLOWED_ORIGIN`
+  - Validation stricte des inputs
+- **Frontend** :
+  - `lib/jira.js` : helper `pushEntryToJira` (fetch vers proxy + parsing) et `getPushableEntries` (filtre)
+  - Settings : champ "URL du proxy" (token jamais côté client)
+  - Bouton **"Pousser N sur Jira"** dans le header du RecapPanel — affiche progression `done/total`
+  - Push séquentiel (safe vs rate limit), confirmation avant, alerte de résumé après
+  - `entry.syncedAt` posé au succès → badge devient `[KEY ✓]` avec opacité réduite
+- **Setup restant côté user** : créer token Atlassian, déployer proxy via Dokploy ([`proxy/README.md`](proxy/README.md)), coller l'URL dans Réglages
+
 ## Jira — Phase 1 (UI + schéma, sans push réel)
 
 - **Toggle global** dans Réglages : quand OFF, aucun élément Jira n'apparaît

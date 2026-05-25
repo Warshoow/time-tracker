@@ -24,6 +24,9 @@ export default function Calendar({
   dayStartMin,
   dayEndMin,
   jiraEnabled,
+  pushableCount,
+  pushState,
+  onPushWeek,
   hoverPos, // { dayKey, minutes } | null
   hoverSuppressed, // true si resize ou modal ouvert
   onSelectDay,
@@ -277,6 +280,10 @@ export default function Calendar({
           totalsByDay={totalsByDay}
           weekTotal={weekTotal}
           projects={projects}
+          jiraEnabled={jiraEnabled}
+          pushableCount={pushableCount}
+          pushState={pushState}
+          onPushWeek={onPushWeek}
         />
       )}
     </main>

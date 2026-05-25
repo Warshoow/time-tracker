@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import { Upload } from "lucide-react";
 import { fmtDateKey, fmtDayLabel, fmtDayNum, fmtDuration } from "../lib/date.js";
 import { PROJECT_COLORS } from "../lib/constants.js";
 
@@ -11,7 +12,13 @@ export default function RecapPanel({
   totalsByDay,
   weekTotal,
   projects,
+  jiraEnabled,
+  pushableCount,
+  pushState,
+  onPushWeek,
 }) {
+  const pushRunning = !!pushState?.running;
+  const showPushBtn = jiraEnabled && (pushableCount > 0 || pushRunning);
   const projectColor = (id) => {
     const idx = projects.findIndex((p) => p.id === id);
     return PROJECT_COLORS[idx % PROJECT_COLORS.length] || PROJECT_COLORS[0];
@@ -32,8 +39,9 @@ export default function RecapPanel({
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "baseline",
+          alignItems: "center",
           marginBottom: 12,
+          gap: 12,
         }}
       >
         <div
@@ -46,9 +54,24 @@ export default function RecapPanel({
         >
           Répartition par projet
         </div>
-        <div className="mono" style={{ fontSize: 11, color: "#2a262080" }}>
-          {recap.length} projet{recap.length > 1 ? "s" : ""} actif
-          {recap.length > 1 ? "s" : ""}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="mono" style={{ fontSize: 11, color: "#2a262080" }}>
+            {recap.length} projet{recap.length > 1 ? "s" : ""} actif
+            {recap.length > 1 ? "s" : ""}
+          </div>
+          {showPushBtn && (
+            <button
+              className="btn btn-primary"
+              onClick={onPushWeek}
+              disabled={pushRunning}
+              style={{ fontSize: 12, padding: "6px 12px" }}
+            >
+              <Upload size={12} />
+              {pushRunning
+                ? `Push ${pushState.done}/${pushState.total}…`
+                : `Pousser ${pushableCount} sur Jira`}
+            </button>
+          )}
         </div>
       </div>
 

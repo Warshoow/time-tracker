@@ -1,8 +1,9 @@
 # Intégration Jira
 
-**Phase 1 livrée.** Phase 2 (push réel) en attente du token API Atlassian et du choix de hosting du proxy.
+**Phase 1 et Phase 2 livrées.** Setup à finaliser côté Dokploy + saisie de l'URL proxy dans les Réglages.
 
 Cible : Jira **Cloud** (`*.atlassian.net`, API v3, auth par email + API token).
+Hosting proxy : **VPS perso via Dokploy** (Docker + TLS auto via Let's Encrypt).
 
 ## Phase 1 — livrée ✓
 
@@ -156,12 +157,34 @@ Si oui sur les 3, commencer par le MVP : proxy + un seul bouton "push entry" sur
 
 ---
 
-## Prérequis Phase 2 (à débloquer avant de coder le push)
+## Phase 2 — livrée ✓
 
-1. **API token Atlassian** créé sur https://id.atlassian.com/manage-profile/security/api-tokens
-   → 3 valeurs à récupérer : `JIRA_BASE_URL` (déjà saisi en Phase 1 dans les Réglages), `JIRA_EMAIL`, `JIRA_API_TOKEN`
-2. **Choix du hosting du proxy** :
-   - Option A : Vercel (frontend reste sur GH Pages, proxy à part — CORS à configurer pour `https://warshoow.github.io`)
-   - Option B : Migrer tout sur Vercel (frontend + API même origine, plus simple)
-   - Option C : Cloudflare Workers (totalement séparé, très léger)
-3. **Vérif IT** que pousser des worklogs via un proxy externe (Vercel/CF) est OK côté politique data.
+### Code
+
+- **Proxy** : [`proxy/`](../proxy/) — Express + Docker, déployable sur Dokploy
+  - Endpoint : `POST /api/jira-worklog` → forward vers Jira `/rest/api/3/issue/{key}/worklog`
+  - Healthcheck : `GET /healthz`
+  - ADF (Atlassian Document Format) géré pour le champ comment
+  - CORS configurable via env `ALLOWED_ORIGIN` (multi-origines séparées par virgule)
+  - Validation : `issueKey`, `startedISO`, `timeSpentSeconds` (entier ≥ 60)
+- **Frontend** :
+  - `lib/jira.js` : helper `pushEntryToJira` + `getPushableEntries`
+  - Settings : nouveau champ "URL du proxy" (à remplir après déploiement)
+  - `pushWeekToJira` dans le root : itère séquentiellement sur les entrées poussables, met à jour `syncedAt` au succès
+  - Bouton **"Pousser N sur Jira"** dans le header du RecapPanel — affiche progression `N/total` pendant le push
+  - Badge `[KEY ✓]` (opacité plus basse) sur les entrées sync, `[KEY]` (opacité haute) sur les non-sync
+
+### Restant à faire (côté toi)
+
+1. **Créer le token Atlassian** sur https://id.atlassian.com/manage-profile/security/api-tokens (label "time-tracker-proxy")
+2. **Déployer le proxy sur Dokploy** : voir [`proxy/README.md`](../proxy/README.md) pour la procédure complète (build context, env vars, healthcheck, domaine TLS)
+3. **Coller l'URL du proxy** dans Réglages → URL du proxy (ex. `https://jira-proxy.tondomaine.com`)
+4. **Tester** : créer une entrée avec une clé Jira, cliquer "Pousser N sur Jira", vérifier dans la timeline Jira
+
+### Détails d'implémentation
+
+- **Sequential push** (pas parallèle) : safe vis-à-vis du rate limit Jira (~10 req/s mais variable). Pour ~20 entrées la latence reste acceptable (<10s).
+- **`syncedAt` n'est posé qu'au succès** : un retry après échec re-tente naturellement.
+- **Aucune mutation côté Jira** : on POST des worklogs, on ne touche pas aux issues elles-mêmes.
+- **Token jamais en clair côté client** : il vit uniquement dans la variable d'env Dokploy. Le frontend ne connaît que l'URL du proxy.
+- **CORS** : le proxy n'autorise que l'origine listée. Si tu veux tester en local (`http://localhost:5173`), mets `ALLOWED_ORIGIN=https://warshoow.github.io,http://localhost:5173`.

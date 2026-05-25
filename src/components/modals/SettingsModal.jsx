@@ -114,21 +114,57 @@ export default function SettingsModal({ settings, setSettings, onClose }) {
           </div>
 
           {settings.jira?.enabled && (
-            <div>
-              <label className="label" style={{ fontSize: 10 }}>
-                URL Jira Cloud
-              </label>
-              <input
-                className="input"
-                placeholder="https://macompagnie.atlassian.net"
-                value={settings.jira?.baseUrl || ""}
-                onChange={(e) =>
-                  setSettings((s) => ({
-                    ...s,
-                    jira: { ...(s.jira || {}), baseUrl: e.target.value.trim() },
-                  }))
-                }
-              />
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <label className="label" style={{ fontSize: 10 }}>
+                  URL Jira Cloud (informatif)
+                </label>
+                <input
+                  className="input"
+                  placeholder="https://macompagnie.atlassian.net"
+                  value={settings.jira?.baseUrl || ""}
+                  onChange={(e) =>
+                    setSettings((s) => ({
+                      ...s,
+                      jira: {
+                        ...(s.jira || {}),
+                        baseUrl: e.target.value.trim(),
+                      },
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="label" style={{ fontSize: 10 }}>
+                  URL du proxy
+                </label>
+                <input
+                  className="input mono"
+                  placeholder="https://jira-proxy.tondomaine.com"
+                  value={settings.jira?.proxyUrl || ""}
+                  onChange={(e) =>
+                    setSettings((s) => ({
+                      ...s,
+                      jira: {
+                        ...(s.jira || {}),
+                        proxyUrl: e.target.value.trim(),
+                      },
+                    }))
+                  }
+                />
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "#2a262080",
+                    marginTop: 6,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Endpoint où le frontend POST. Le token API Atlassian est
+                  stocké côté proxy uniquement, jamais ici. Voir{" "}
+                  <span className="mono">proxy/README.md</span> pour le setup.
+                </div>
+              </div>
             </div>
           )}
         </div>

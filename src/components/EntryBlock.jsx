@@ -22,17 +22,19 @@ export default function EntryBlock({
   const dur = en - s;
   const layoutMode = dur <= 15 ? "compact" : dur < 60 ? "inline" : "full";
 
+  const synced = !!entry.syncedAt;
   const jiraBadge = jiraKey && (
     <span
       className="mono"
       style={{
         fontSize: 9,
         color: color.bg,
-        opacity: 0.7,
+        opacity: synced ? 0.45 : 0.8,
         marginLeft: 5,
       }}
+      title={synced ? `Synchronisé le ${entry.syncedAt}` : "Non synchronisé"}
     >
-      [{jiraKey}]
+      [{jiraKey}{synced ? " ✓" : ""}]
     </span>
   );
 

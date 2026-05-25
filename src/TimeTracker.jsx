@@ -8,6 +8,7 @@ import {
 } from "./lib/date.js";
 import { SNAP_MIN } from "./lib/constants.js";
 import { loadState, saveState } from "./lib/storage.js";
+import { pushEntryToJira, getPushableEntries } from "./lib/jira.js";
 import Sidebar from "./components/Sidebar.jsx";
 import Calendar from "./components/Calendar.jsx";
 import SettingsModal from "./components/modals/SettingsModal.jsx";
@@ -33,6 +34,7 @@ export default function TimeTracker() {
   const [addModal, setAddModal] = useState(null); // null | { date, projectId, title, jiraKey, start, end }
   const [hoverPos, setHoverPos] = useState(null); // null | { dayKey, minutes }
   const [resizing, setResizing] = useState(null); // null | { id, edge, startY, origStart, origEnd }
+  const [pushState, setPushState] = useState(null); // null | { running, total, done }
 
   // Form rapide de la sidebar
   const [form, setForm] = useState({
@@ -127,6 +129,15 @@ export default function TimeTracker() {
 
   const formDuration =
     minutesFromHHMM(form.end) - minutesFromHHMM(form.start);
+
+  // Entrées poussables cette semaine : jiraEnabled + clé effective + pas encore sync.
+  const pushableThisWeek = useMemo(() => {
+    if (!jiraEnabled) return [];
+    const dayKeys = days.map(fmtDateKey);
+    return getPushableEntries(entries, projects).filter((e) =>
+      dayKeys.includes(e.date)
+    );
+  }, [entries, projects, days, jiraEnabled]);
 
   // ----- Handlers : projets -----
   const submitProjectModal = () => {
@@ -298,6 +309,61 @@ export default function TimeTracker() {
     };
   }, [resizing, dayStartMin, dayEndMin]);
 
+  // ----- Handler : push batch sur Jira -----
+  const pushWeekToJira = async () => {
+    if (!jiraEnabled || pushableThisWeek.length === 0) return;
+    const proxyUrl = settings.jira?.proxyUrl?.trim();
+    if (!proxyUrl) {
+      alert("Renseigne d'abord l'URL du proxy dans Réglages.");
+      return;
+    }
+    if (
+      !confirm(
+        `Pousser ${pushableThisWeek.length} entrée(s) sur Jira ?\nLes worklogs apparaîtront dans ta timeline Jira.`
+      )
+    )
+      return;
+
+    setPushState({ running: true, total: pushableThisWeek.length, done: 0 });
+
+    const results = [];
+    for (const entry of pushableThisWeek) {
+      const project = projects.find((p) => p.id === entry.projectId);
+      // eslint-disable-next-line no-await-in-loop
+      const result = await pushEntryToJira({ entry, project, proxyUrl });
+      results.push({ entryId: entry.id, ...result });
+      setPushState((s) =>
+        s ? { ...s, done: s.done + 1 } : null
+      );
+    }
+
+    const nowISO = new Date().toISOString();
+    setEntries((arr) =>
+      arr.map((e) => {
+        const r = results.find((x) => x.entryId === e.id);
+        return r?.ok ? { ...e, syncedAt: nowISO } : e;
+      })
+    );
+    setPushState(null);
+
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    if (failCount === 0) {
+      alert(`✓ ${okCount} entrée(s) poussée(s) sur Jira.`);
+    } else {
+      const failedDetails = results
+        .filter((r) => !r.ok)
+        .map((r) => {
+          const e = entries.find((x) => x.id === r.entryId);
+          return `• ${e?.date} ${e?.start}–${e?.end} → ${r.error}`;
+        })
+        .join("\n");
+      alert(
+        `Résultat : ${okCount} OK · ${failCount} échec(s)\n\n${failedDetails}`
+      );
+    }
+  };
+
   // ----- Handlers : navigation semaine -----
   const goPrevWeek = () => setWeekStart((d) => addDays(d, -7));
   const goNextWeek = () => setWeekStart((d) => addDays(d, 7));
@@ -374,6 +440,9 @@ export default function TimeTracker() {
           dayStartMin={dayStartMin}
           dayEndMin={dayEndMin}
           jiraEnabled={jiraEnabled}
+          pushableCount={pushableThisWeek.length}
+          pushState={pushState}
+          onPushWeek={pushWeekToJira}
           hoverPos={hoverPos}
           hoverSuppressed={!!resizing || !!addModal}
           onSelectDay={setSelectedDay}
