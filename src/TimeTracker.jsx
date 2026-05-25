@@ -122,10 +122,14 @@ export default function TimeTracker() {
   const [selectedDay, setSelectedDay] = useState(fmtDateKey(new Date()));
   const [projects, setProjects] = useState([]);
   const [entries, setEntries] = useState([]); // {id, projectId, date, start, end, title}
-  const [settings, setSettings] = useState({ dayStart: "09:00", dayEnd: "17:30" });
+  const [settings, setSettings] = useState({
+    dayStart: "09:00",
+    dayEnd: "17:30",
+    jira: { enabled: false, baseUrl: "" },
+  });
   const [showSettings, setShowSettings] = useState(false);
-  const [showProjectForm, setShowProjectForm] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
+  // Project modal : null = fermé ; { id?, name, jiraKey } = ouvert (en édition si id, sinon création)
+  const [projectModal, setProjectModal] = useState(null);
 
   // Form state
   const [form, setForm] = useState({
@@ -150,7 +154,14 @@ export default function TimeTracker() {
     if (s) {
       if (s.projects) setProjects(s.projects);
       if (s.entries) setEntries(s.entries);
-      if (s.settings) setSettings(s.settings);
+      if (s.settings) {
+        // merge pour que les défauts (jira.*) soient présents même sur d'anciennes data
+        setSettings((prev) => ({
+          ...prev,
+          ...s.settings,
+          jira: { ...prev.jira, ...(s.settings.jira || {}) },
+        }));
+      }
     }
     setLoaded(true);
   }, []);
@@ -234,15 +245,39 @@ export default function TimeTracker() {
 
   const projectById = (id) => projects.find((p) => p.id === id);
 
+  // Clé Jira effective : override de l'entrée si présent, sinon défaut du projet
+  const effectiveJiraKey = (entry) =>
+    entry.jiraKey || projectById(entry.projectId)?.jiraKey || "";
+
+  const jiraEnabled = !!settings.jira?.enabled;
+
   // ----- Handlers -----
-  const addProject = () => {
-    const name = newProjectName.trim();
+  const submitProjectModal = () => {
+    if (!projectModal) return;
+    const name = projectModal.name.trim();
     if (!name) return;
-    const p = { id: `p_${Date.now()}`, name };
-    setProjects((arr) => [...arr, p]);
-    setNewProjectName("");
-    setShowProjectForm(false);
-    if (!form.projectId) setForm((f) => ({ ...f, projectId: p.id }));
+    const jiraKey = (projectModal.jiraKey || "").trim();
+
+    if (projectModal.id) {
+      // édition
+      setProjects((arr) =>
+        arr.map((p) =>
+          p.id === projectModal.id
+            ? { ...p, name, jiraKey: jiraKey || undefined }
+            : p
+        )
+      );
+    } else {
+      // création
+      const p = {
+        id: `p_${Date.now()}`,
+        name,
+        ...(jiraKey ? { jiraKey } : {}),
+      };
+      setProjects((arr) => [...arr, p]);
+      if (!form.projectId) setForm((f) => ({ ...f, projectId: p.id }));
+    }
+    setProjectModal(null);
   };
 
   const removeProject = (id) => {
@@ -339,11 +374,15 @@ export default function TimeTracker() {
       Math.min(mins, dayEndMin - SNAP_MIN)
     );
     const endMin = Math.min(startMin + 60, dayEndMin);
+    const initialProjectId = form.projectId || projects[0]?.id || "";
+    const initialJiraKey =
+      projects.find((p) => p.id === initialProjectId)?.jiraKey || "";
     setHoverPos(null);
     setAddModal({
       date,
-      projectId: form.projectId || projects[0]?.id || "",
+      projectId: initialProjectId,
       title: "",
+      jiraKey: initialJiraKey,
       start: hhmmFromMinutes(startMin),
       end: hhmmFromMinutes(endMin),
     });
@@ -361,6 +400,13 @@ export default function TimeTracker() {
       alert("L'heure de fin doit être après l'heure de début.");
       return;
     }
+    const projectDefaultKey =
+      projects.find((p) => p.id === addModal.projectId)?.jiraKey || "";
+    const typedKey = (addModal.jiraKey || "").trim();
+    // On stocke jiraKey uniquement si l'utilisateur a saisi une valeur différente du défaut
+    const overrideKey =
+      typedKey && typedKey !== projectDefaultKey ? typedKey : undefined;
+
     setEntries((arr) => [
       ...arr,
       {
@@ -370,6 +416,7 @@ export default function TimeTracker() {
         start: addModal.start,
         end: addModal.end,
         title: addModal.title.trim(),
+        ...(overrideKey ? { jiraKey: overrideKey } : {}),
       },
     ]);
     setAddModal(null);
@@ -767,7 +814,7 @@ export default function TimeTracker() {
               </div>
               <button
                 className="btn-icon"
-                onClick={() => setShowProjectForm(true)}
+                onClick={() => setProjectModal({ name: "", jiraKey: "" })}
                 aria-label="Ajouter un projet"
                 style={{ border: "none" }}
               >
@@ -818,15 +865,36 @@ export default function TimeTracker() {
                         }}
                       />
                       <span
+                        onClick={() =>
+                          setProjectModal({
+                            id: p.id,
+                            name: p.name,
+                            jiraKey: p.jiraKey || "",
+                          })
+                        }
                         style={{
                           flex: 1,
                           fontSize: 13,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
+                          cursor: "pointer",
                         }}
+                        title="Modifier le projet"
                       >
                         {p.name}
+                        {jiraEnabled && p.jiraKey && (
+                          <span
+                            className="mono"
+                            style={{
+                              fontSize: 10,
+                              color: "#2a262080",
+                              marginLeft: 6,
+                            }}
+                          >
+                            [{p.jiraKey}]
+                          </span>
+                        )}
                       </span>
                       <button
                         onClick={() => removeProject(p.id)}
@@ -855,7 +923,7 @@ export default function TimeTracker() {
               style={{ width: "100%", justifyContent: "center" }}
               onClick={() => setShowSettings(true)}
             >
-              <Settings size={13} /> Plage horaire
+              <Settings size={13} /> Réglages
             </button>
           </div>
         </aside>
@@ -1161,6 +1229,22 @@ export default function TimeTracker() {
                       const layoutMode =
                         dur <= 15 ? "compact" : dur < 60 ? "inline" : "full";
 
+                      const jKey = jiraEnabled ? effectiveJiraKey(e) : "";
+
+                      const jiraBadge = jKey && (
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 9,
+                            color: c.bg,
+                            opacity: 0.7,
+                            marginLeft: 5,
+                          }}
+                        >
+                          [{jKey}]
+                        </span>
+                      );
+
                       const headerLine = (
                         <div
                           style={{
@@ -1175,6 +1259,7 @@ export default function TimeTracker() {
                           <span style={{ fontWeight: 600, color: c.bg }}>
                             {proj?.name || "—"}
                           </span>
+                          {jiraBadge}
                           {e.title && (
                             <span style={{ opacity: 0.75, marginLeft: 6 }}>
                               · {e.title}
@@ -1252,6 +1337,7 @@ export default function TimeTracker() {
                                 }}
                               >
                                 {proj?.name || "—"}
+                                {jiraBadge}
                               </div>
                               {e.title && (
                                 <div
@@ -1490,7 +1576,7 @@ export default function TimeTracker() {
                 className="display"
                 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}
               >
-                Plage horaire
+                Réglages
               </h3>
               <button
                 className="btn-icon"
@@ -1500,9 +1586,16 @@ export default function TimeTracker() {
                 <X size={16} />
               </button>
             </div>
+
+            {/* Section Plage horaire */}
+            <div className="label" style={{ marginBottom: 10 }}>
+              Plage horaire
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <label className="label">Début</label>
+                <label className="label" style={{ fontSize: 10 }}>
+                  Début
+                </label>
                 <TimePicker
                   value={settings.dayStart}
                   onChange={(v) => setSettings((s) => ({ ...s, dayStart: v }))}
@@ -1512,7 +1605,9 @@ export default function TimeTracker() {
                 />
               </div>
               <div>
-                <label className="label">Fin</label>
+                <label className="label" style={{ fontSize: 10 }}>
+                  Fin
+                </label>
                 <TimePicker
                   value={settings.dayEnd}
                   onChange={(v) => setSettings((s) => ({ ...s, dayEnd: v }))}
@@ -1522,9 +1617,84 @@ export default function TimeTracker() {
                 />
               </div>
             </div>
+
+            {/* Section Jira */}
             <div
               style={{
-                marginTop: 20,
+                marginTop: 24,
+                paddingTop: 20,
+                borderTop: "1px solid #2a262020",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 6,
+                }}
+              >
+                <div className="label" style={{ margin: 0 }}>
+                  Intégration Jira
+                </div>
+                <label
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={settings.jira?.enabled || false}
+                    onChange={(e) =>
+                      setSettings((s) => ({
+                        ...s,
+                        jira: { ...(s.jira || {}), enabled: e.target.checked },
+                      }))
+                    }
+                  />
+                  <span>{settings.jira?.enabled ? "Activée" : "Désactivée"}</span>
+                </label>
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "#2a262080",
+                  marginBottom: 12,
+                  lineHeight: 1.4,
+                }}
+              >
+                Quand activée, les projets et les entrées peuvent porter une issue
+                Jira (ex. <span className="mono">API-42</span>). Le push effectif
+                vers Jira sera ajouté en Phase&nbsp;2.
+              </div>
+
+              {settings.jira?.enabled && (
+                <div>
+                  <label className="label" style={{ fontSize: 10 }}>
+                    URL Jira Cloud
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="https://macompagnie.atlassian.net"
+                    value={settings.jira?.baseUrl || ""}
+                    onChange={(e) =>
+                      setSettings((s) => ({
+                        ...s,
+                        jira: { ...(s.jira || {}), baseUrl: e.target.value.trim() },
+                      }))
+                    }
+                  />
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                marginTop: 24,
                 display: "flex",
                 justifyContent: "flex-end",
                 gap: 8,
@@ -1538,9 +1708,9 @@ export default function TimeTracker() {
         </div>
       )}
 
-      {/* ========== Project modal ========== */}
-      {showProjectForm && (
-        <div className="modal-overlay" onClick={() => setShowProjectForm(false)}>
+      {/* ========== Project modal (create + edit) ========== */}
+      {projectModal && (
+        <div className="modal-overlay" onClick={() => setProjectModal(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div
               style={{
@@ -1554,40 +1724,75 @@ export default function TimeTracker() {
                 className="display"
                 style={{ margin: 0, fontSize: 22, fontWeight: 500 }}
               >
-                Nouveau projet
+                {projectModal.id ? "Modifier le projet" : "Nouveau projet"}
               </h3>
               <button
                 className="btn-icon"
                 style={{ border: "none" }}
-                onClick={() => setShowProjectForm(false)}
+                onClick={() => setProjectModal(null)}
               >
                 <X size={16} />
               </button>
             </div>
+
             <label className="label">Nom du projet</label>
             <input
               autoFocus
               className="input"
               placeholder="ex. Refonte API, Onboarding…"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
+              value={projectModal.name}
+              onChange={(e) =>
+                setProjectModal((m) => ({ ...m, name: e.target.value }))
+              }
               onKeyDown={(e) => {
-                if (e.key === "Enter") addProject();
+                if (e.key === "Enter") submitProjectModal();
               }}
             />
+
+            {jiraEnabled && (
+              <div style={{ marginTop: 14 }}>
+                <label className="label">Issue Jira par défaut (optionnel)</label>
+                <input
+                  className="input mono"
+                  placeholder="ex. API-42"
+                  value={projectModal.jiraKey}
+                  onChange={(e) =>
+                    setProjectModal((m) => ({
+                      ...m,
+                      jiraKey: e.target.value.toUpperCase(),
+                    }))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitProjectModal();
+                  }}
+                />
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "#2a262080",
+                    marginTop: 6,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  Utilisée par défaut pour les nouvelles entrées de ce projet.
+                  Tu pourras la surcharger entrée par entrée.
+                </div>
+              </div>
+            )}
+
             <div
               style={{
-                marginTop: 20,
+                marginTop: 22,
                 display: "flex",
                 justifyContent: "flex-end",
                 gap: 8,
               }}
             >
-              <button className="btn" onClick={() => setShowProjectForm(false)}>
+              <button className="btn" onClick={() => setProjectModal(null)}>
                 Annuler
               </button>
-              <button className="btn btn-primary" onClick={addProject}>
-                Créer
+              <button className="btn btn-primary" onClick={submitProjectModal}>
+                {projectModal.id ? "Mettre à jour" : "Créer"}
               </button>
             </div>
           </div>
@@ -1674,14 +1879,22 @@ export default function TimeTracker() {
                 <select
                   className="select"
                   value={addModal.projectId}
-                  onChange={(ev) =>
-                    setAddModal((m) => ({ ...m, projectId: ev.target.value }))
-                  }
+                  onChange={(ev) => {
+                    const newId = ev.target.value;
+                    const defaultKey =
+                      projects.find((p) => p.id === newId)?.jiraKey || "";
+                    setAddModal((m) => ({
+                      ...m,
+                      projectId: newId,
+                      jiraKey: defaultKey,
+                    }));
+                  }}
                 >
                   <option value="">— choisir —</option>
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
+                      {p.jiraKey ? ` · ${p.jiraKey}` : ""}
                     </option>
                   ))}
                 </select>
@@ -1699,6 +1912,23 @@ export default function TimeTracker() {
                   }
                 />
               </div>
+
+              {jiraEnabled && (
+                <div>
+                  <label className="label">Issue Jira (optionnel)</label>
+                  <input
+                    className="input mono"
+                    placeholder="ex. API-42"
+                    value={addModal.jiraKey || ""}
+                    onChange={(ev) =>
+                      setAddModal((m) => ({
+                        ...m,
+                        jiraKey: ev.target.value.toUpperCase(),
+                      }))
+                    }
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="label">Durée</label>
