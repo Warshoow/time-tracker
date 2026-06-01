@@ -180,11 +180,181 @@ app.get("/api/jira-epics", async (req, res) => {
   }
 });
 
+// Liste les sprints actifs + futurs d'un espace (via les Scrum boards associés).
+// Les Kanban boards n'ont pas de sprint donc ils sont skip.
+app.get("/api/jira-sprints", async (req, res) => {
+  const { projectKey } = req.query;
+  if (!projectKey) return res.status(400).json({ error: "projectKey requis" });
+  try {
+    // 1) Récupère les boards du projet (Agile API)
+    const boardsData = await jiraGet(
+      `/rest/agile/1.0/board?projectKeyOrId=${encodeURIComponent(
+        projectKey
+      )}&maxResults=50`
+    );
+    const boards = boardsData.values || [];
+
+    // 2) Pour chaque Scrum board, fetch les sprints actifs + futurs
+    const allSprints = [];
+    for (const board of boards) {
+      if (board.type !== "scrum") continue;
+      try {
+        const sprintsData = await jiraGet(
+          `/rest/agile/1.0/board/${board.id}/sprint?state=active,future&maxResults=50`
+        );
+        for (const s of sprintsData.values || []) {
+          allSprints.push({
+            id: s.id,
+            name: s.name,
+            state: s.state,
+            boardName: board.name,
+            startDate: s.startDate,
+            endDate: s.endDate,
+          });
+        }
+      } catch (e) {
+        // Certains boards peuvent fail (permissions), on continue les autres
+        console.warn(
+          `Failed to fetch sprints for board ${board.id}: ${e.message}`
+        );
+      }
+    }
+
+    // Dédup par id (un sprint peut apparaître sur plusieurs boards)
+    const seen = new Set();
+    const unique = allSprints.filter((s) => {
+      if (seen.has(s.id)) return false;
+      seen.add(s.id);
+      return true;
+    });
+
+    // Tri : actifs d'abord, puis par date de début ascendante
+    unique.sort((a, b) => {
+      if (a.state === "active" && b.state !== "active") return -1;
+      if (b.state === "active" && a.state !== "active") return 1;
+      return (a.startDate || "").localeCompare(b.startDate || "");
+    });
+
+    res.json({ ok: true, sprints: unique });
+  } catch (e) {
+    console.error("Proxy error (sprints):", e);
+    res.status(e.status || 502).json({
+      error: "Jira API error",
+      details: e.body || String(e),
+      calledPath: e.path,
+    });
+  }
+});
+
+// Liste les Stories d'un espace (pour pouvoir lier une Tâche en cours de création).
+app.get("/api/jira-stories", async (req, res) => {
+  const { projectKey } = req.query;
+  if (!projectKey) return res.status(400).json({ error: "projectKey requis" });
+  const jql = `project="${projectKey}" AND issuetype=Story ORDER BY created DESC`;
+  try {
+    const data = await jiraGet(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(
+        jql
+      )}&fields=summary,status&maxResults=50`
+    );
+    const stories = (data.issues || []).map((i) => ({
+      key: i.key,
+      summary: i.fields?.summary || "",
+      status: i.fields?.status?.name || "",
+    }));
+    res.json({ ok: true, stories });
+  } catch (e) {
+    console.error("Proxy error (stories):", e);
+    res
+      .status(e.status || 502)
+      .json({
+        error: "Jira API error",
+        details: e.body || String(e),
+        calledPath: e.path,
+      });
+  }
+});
+
+// Liste les types de lien (issue link types) — utilisés pour la relation Task ↔ Story.
+app.get("/api/jira-link-types", async (_req, res) => {
+  try {
+    const data = await jiraGet(`/rest/api/3/issueLinkType`);
+    const types = (data.issueLinkTypes || []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      inward: t.inward,
+      outward: t.outward,
+    }));
+    res.json({ ok: true, types });
+  } catch (e) {
+    console.error("Proxy error (link types):", e);
+    res
+      .status(e.status || 502)
+      .json({
+        error: "Jira API error",
+        details: e.body || String(e),
+        calledPath: e.path,
+      });
+  }
+});
+
+// Crée un lien entre deux issues.
+//   outwardKey : l'issue source (perspective "outward" du type, ex. "is child of X")
+//   inwardKey  : l'issue cible (la liée, ex. la Story parente)
+app.post("/api/jira-issue-link", async (req, res) => {
+  const { typeName, outwardKey, inwardKey } = req.body || {};
+  if (!typeName || !outwardKey || !inwardKey) {
+    return res
+      .status(400)
+      .json({ error: "typeName, outwardKey, inwardKey requis" });
+  }
+  const url = `${JIRA_BASE_URL.replace(/\/$/, "")}/rest/api/3/issueLink`;
+  try {
+    console.log(
+      `→ POST /rest/api/3/issueLink (${typeName}: ${outwardKey} → ${inwardKey})`
+    );
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        type: { name: typeName },
+        outwardIssue: { key: outwardKey },
+        inwardIssue: { key: inwardKey },
+      }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      console.error(`← ${r.status} on link create: ${text.slice(0, 200)}`);
+      return res.status(r.status).json({
+        error: "Jira API error",
+        status: r.status,
+        details: text.slice(0, 500),
+      });
+    }
+    // POST /issueLink retourne 201 Created sans body
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("Proxy error (issue link):", e);
+    res.status(502).json({ error: "Proxy error", details: String(e) });
+  }
+});
+
 // Crée un ticket Jira (Epic, Story, Tâche, …).
-// Body : { projectKey, issueTypeName, summary, description?, parentKey?, labels? }
+// Body : { projectKey, issueTypeName, summary, description?, parentKey?, labels?, sprintId? }
 app.post("/api/jira-issue", async (req, res) => {
-  const { projectKey, issueTypeName, summary, description, parentKey, labels } =
-    req.body || {};
+  const {
+    projectKey,
+    issueTypeName,
+    summary,
+    description,
+    parentKey,
+    labels,
+    sprintId,
+  } = req.body || {};
 
   if (!projectKey || typeof projectKey !== "string") {
     return res.status(400).json({ error: "projectKey requis (string)" });
@@ -235,7 +405,46 @@ app.post("/api/jira-issue", async (req, res) => {
       });
     }
     const data = await r.json();
-    res.json({ ok: true, key: data.key, id: data.id });
+
+    // Si sprintId fourni, on ajoute l'issue au sprint via l'Agile API.
+    // Échec non bloquant : l'issue est créée, on remonte juste un warning.
+    let sprintWarning;
+    if (sprintId) {
+      try {
+        console.log(
+          `→ POST /rest/agile/1.0/sprint/${sprintId}/issue (${data.key})`
+        );
+        const sprintRes = await fetch(
+          `${JIRA_BASE_URL.replace(/\/$/, "")}/rest/agile/1.0/sprint/${sprintId}/issue`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: authHeader,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({ issues: [data.key] }),
+          }
+        );
+        if (!sprintRes.ok) {
+          const txt = await sprintRes.text();
+          console.error(
+            `← ${sprintRes.status} on add to sprint: ${txt.slice(0, 200)}`
+          );
+          sprintWarning = `Ajout au sprint ${sprintId} a échoué (${sprintRes.status})`;
+        }
+      } catch (e) {
+        console.warn("Error adding to sprint:", e);
+        sprintWarning = `Ajout au sprint ${sprintId} a échoué (${e.message})`;
+      }
+    }
+
+    res.json({
+      ok: true,
+      key: data.key,
+      id: data.id,
+      ...(sprintWarning ? { sprintWarning } : {}),
+    });
   } catch (e) {
     console.error("Proxy error (create issue):", e);
     res.status(502).json({ error: "Proxy error", details: String(e) });

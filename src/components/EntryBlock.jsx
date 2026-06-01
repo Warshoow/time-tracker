@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { minutesFromHHMM } from "../lib/date.js";
+import { isValidIssueKey } from "../lib/jira.js";
 
 // 3 layouts selon la durée :
 //   ≤ 15 min        → compact (1 ligne centrée verticalement)
@@ -14,6 +15,7 @@ export default function EntryBlock({
   leftPct,
   widthPct,
   jiraKey, // clé effective déjà résolue par le parent
+  jiraBaseUrl, // URL Jira pour rendre le badge cliquable
   isRemote, // entrée venant de Jira (lecture seule)
   onStartResize,
   onRemove,
@@ -28,12 +30,16 @@ export default function EntryBlock({
   // marker : ⟳ si dirty (à re-sync), ✓ si propre, rien si pas encore sync
   const marker = dirty ? " ⟳" : synced ? " ✓" : "";
   const badgeOpacity = dirty ? 0.85 : synced ? 0.45 : 0.8;
-  const badgeTitle = dirty
-    ? "Modifiée depuis la dernière sync — clique sur 'Pousser sur Jira' pour mettre à jour"
-    : synced
-      ? `Synchronisé le ${entry.syncedAt}`
-      : "Non synchronisé";
-  const jiraBadge = jiraKey && (
+  const linkable = jiraKey && jiraBaseUrl && isValidIssueKey(jiraKey);
+  const badgeTitle = linkable
+    ? `Ouvrir ${jiraKey} dans Jira`
+    : dirty
+      ? "Modifiée depuis la dernière sync — clique sur 'Pousser sur Jira' pour mettre à jour"
+      : synced
+        ? `Synchronisé le ${entry.syncedAt}`
+        : "Non synchronisé";
+
+  const badgeContent = (
     <span
       className="mono"
       style={{
@@ -41,12 +47,31 @@ export default function EntryBlock({
         color: color.bg,
         opacity: badgeOpacity,
         marginLeft: 5,
+        ...(linkable
+          ? { textDecoration: "underline", textDecorationStyle: "dotted" }
+          : {}),
       }}
-      title={badgeTitle}
     >
       [{jiraKey}{marker}]
     </span>
   );
+
+  const jiraBadge =
+    jiraKey &&
+    (linkable ? (
+      <a
+        href={`${jiraBaseUrl.replace(/\/$/, "")}/browse/${jiraKey}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(ev) => ev.stopPropagation()}
+        title={badgeTitle}
+        style={{ textDecoration: "none" }}
+      >
+        {badgeContent}
+      </a>
+    ) : (
+      <span title={badgeTitle}>{badgeContent}</span>
+    ));
 
   const headerLine = (
     <div

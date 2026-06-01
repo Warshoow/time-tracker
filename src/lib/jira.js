@@ -99,7 +99,51 @@ export async function fetchJiraEpics({ proxyUrl, projectKey }) {
   return { ok: true, epics: data.epics || [] };
 }
 
-// Crée un ticket Jira. Retourne { ok, key?, error? }.
+// Liste les sprints actifs + futurs d'un espace (via les Scrum boards associés).
+export async function fetchJiraSprints({ proxyUrl, projectKey }) {
+  if (!projectKey) return { ok: false, error: "projectKey requis" };
+  const data = await callProxy({
+    proxyUrl,
+    path: `/api/jira-sprints?projectKey=${encodeURIComponent(projectKey)}`,
+  });
+  if (!data.ok) return data;
+  return { ok: true, sprints: data.sprints || [] };
+}
+
+// Liste les Stories d'un espace (pour le picker "Lier à une story").
+export async function fetchJiraStories({ proxyUrl, projectKey }) {
+  if (!projectKey) return { ok: false, error: "projectKey requis" };
+  const data = await callProxy({
+    proxyUrl,
+    path: `/api/jira-stories?projectKey=${encodeURIComponent(projectKey)}`,
+  });
+  if (!data.ok) return data;
+  return { ok: true, stories: data.stories || [] };
+}
+
+// Liste les types de lien disponibles dans l'instance Jira.
+export async function fetchJiraLinkTypes({ proxyUrl }) {
+  const data = await callProxy({ proxyUrl, path: "/api/jira-link-types" });
+  if (!data.ok) return data;
+  return { ok: true, types: data.types || [] };
+}
+
+// Crée un lien entre deux issues (ex. Task "is child of" Story).
+export async function createJiraIssueLink({
+  proxyUrl,
+  typeName,
+  outwardKey,
+  inwardKey,
+}) {
+  return callProxy({
+    proxyUrl,
+    path: "/api/jira-issue-link",
+    method: "POST",
+    body: { typeName, outwardKey, inwardKey },
+  });
+}
+
+// Crée un ticket Jira. Retourne { ok, key?, sprintWarning?, error? }.
 export async function createJiraIssue({
   proxyUrl,
   projectKey,
@@ -108,6 +152,7 @@ export async function createJiraIssue({
   description,
   parentKey,
   labels,
+  sprintId,
 }) {
   return callProxy({
     proxyUrl,
@@ -120,6 +165,7 @@ export async function createJiraIssue({
       ...(description ? { description } : {}),
       ...(parentKey ? { parentKey } : {}),
       ...(labels && labels.length > 0 ? { labels } : {}),
+      ...(sprintId ? { sprintId } : {}),
     },
   });
 }

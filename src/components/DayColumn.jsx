@@ -43,6 +43,7 @@ export default function DayColumn({
   hourLines,
   hoverMinutes, // minutes si la souris est sur cette colonne, sinon null
   jiraEnabled,
+  jiraBaseUrl,
   onSelectDay,
   onOpenAddModal,
   onHoverChange,
@@ -170,6 +171,7 @@ export default function DayColumn({
               leftPct={leftPct}
               widthPct={widthPct}
               jiraKey={keyToShow}
+              jiraBaseUrl={jiraBaseUrl}
               isRemote={isRemote}
               onStartResize={
                 isRemote ? null : (ev, edge) => onStartResize(ev, e, edge)

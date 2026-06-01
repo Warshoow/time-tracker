@@ -24,8 +24,10 @@ export default function Calendar({
   dayStartMin,
   dayEndMin,
   jiraEnabled,
+  jiraBaseUrl,
   pushableCount,
   pushState,
+  loadingRemoteWorklogs,
   onPushWeek,
   hoverPos, // { dayKey, minutes } | null
   hoverSuppressed, // true si resize ou modal ouvert
@@ -98,7 +100,23 @@ export default function Calendar({
           </h2>
         </div>
 
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {loadingRemoteWorklogs && (
+            <div
+              className="mono"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 10,
+                color: "#2a262080",
+                marginRight: 8,
+              }}
+            >
+              <span className="spinner" />
+              Chargement Jira…
+            </div>
+          )}
           <button
             className="btn-icon"
             onClick={onPrevWeek}
@@ -261,6 +279,7 @@ export default function Calendar({
               hourLines={hourLines}
               hoverMinutes={hoverMinutes}
               jiraEnabled={jiraEnabled}
+              jiraBaseUrl={jiraBaseUrl}
               onSelectDay={() => onSelectDay(key)}
               onOpenAddModal={(mins) => onOpenAddModal(key, mins)}
               onHoverChange={(mins) => onHoverChange(key, mins)}

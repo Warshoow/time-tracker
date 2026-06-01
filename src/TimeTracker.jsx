@@ -47,6 +47,7 @@ export default function TimeTracker() {
   // null | { jiraProjectKey, issueTypeName, parentKey, summary, description, labels }
   const [remoteWorklogs, setRemoteWorklogs] = useState([]);
   // [{ issueKey, issueSummary, projectKey, worklogs: [{ id, started, timeSpentSeconds, comment }] }]
+  const [loadingRemoteWorklogs, setLoadingRemoteWorklogs] = useState(false);
 
   // Form rapide de la sidebar
   const [form, setForm] = useState({
@@ -95,6 +96,7 @@ export default function TimeTracker() {
     const from = fmtDateKey(weekStart);
     const to = fmtDateKey(addDays(weekStart, 4));
     let cancelled = false;
+    setLoadingRemoteWorklogs(true);
     fetchWeekWorklogs({ proxyUrl, from, to }).then((res) => {
       if (cancelled) return;
       if (res.ok) setRemoteWorklogs(res.items || []);
@@ -102,6 +104,7 @@ export default function TimeTracker() {
         console.warn("Fetch worklogs failed:", res.error);
         setRemoteWorklogs([]);
       }
+      setLoadingRemoteWorklogs(false);
     });
     return () => {
       cancelled = true;
@@ -600,8 +603,10 @@ export default function TimeTracker() {
           dayStartMin={dayStartMin}
           dayEndMin={dayEndMin}
           jiraEnabled={jiraEnabled}
+          jiraBaseUrl={settings.jira?.baseUrl || ""}
           pushableCount={pushableThisWeek.length}
           pushState={pushState}
+          loadingRemoteWorklogs={loadingRemoteWorklogs}
           onPushWeek={pushWeekToJira}
           hoverPos={hoverPos}
           hoverSuppressed={!!resizing || !!addModal}
@@ -650,6 +655,9 @@ export default function TimeTracker() {
             summary: prefill?.summary || "",
             description: "",
             labels: "",
+            linkToStoryKey: "",
+            linkTypeName: "",
+            sprintId: "",
           })
         }
       />
