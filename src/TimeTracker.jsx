@@ -10,14 +10,18 @@ import { SNAP_MIN } from "./lib/constants.js";
 import { loadState, saveState } from "./lib/storage.js";
 import {
   pushEntryToJira,
+  updateJiraWorklog,
   getPushableEntries,
   defaultEntryJiraKey,
+  isValidIssueKey,
+  fetchWeekWorklogs,
 } from "./lib/jira.js";
 import Sidebar from "./components/Sidebar.jsx";
 import Calendar from "./components/Calendar.jsx";
 import SettingsModal from "./components/modals/SettingsModal.jsx";
 import ProjectModal from "./components/modals/ProjectModal.jsx";
 import AddEntryModal from "./components/modals/AddEntryModal.jsx";
+import CreateIssueModal from "./components/modals/CreateIssueModal.jsx";
 
 export default function TimeTracker() {
   // ----- État principal -----
@@ -39,6 +43,10 @@ export default function TimeTracker() {
   const [hoverPos, setHoverPos] = useState(null); // null | { dayKey, minutes }
   const [resizing, setResizing] = useState(null); // null | { id, edge, startY, origStart, origEnd }
   const [pushState, setPushState] = useState(null); // null | { running, total, done }
+  const [createIssueModal, setCreateIssueModal] = useState(null);
+  // null | { jiraProjectKey, issueTypeName, parentKey, summary, description, labels }
+  const [remoteWorklogs, setRemoteWorklogs] = useState([]);
+  // [{ issueKey, issueSummary, projectKey, worklogs: [{ id, started, timeSpentSeconds, comment }] }]
 
   // Form rapide de la sidebar
   const [form, setForm] = useState({
@@ -71,6 +79,35 @@ export default function TimeTracker() {
     saveState({ projects, entries, settings });
   }, [projects, entries, settings, loaded]);
 
+  // Fetch des worklogs Jira pour la semaine visible.
+  // jiraEnabled est inliné ici car le `const jiraEnabled` est déclaré plus bas
+  // dans la fonction (et la dep array serait évaluée avant sa déclaration → TDZ).
+  useEffect(() => {
+    if (!loaded || !settings.jira?.enabled) {
+      setRemoteWorklogs([]);
+      return;
+    }
+    const proxyUrl = settings.jira?.proxyUrl?.trim();
+    if (!proxyUrl) {
+      setRemoteWorklogs([]);
+      return;
+    }
+    const from = fmtDateKey(weekStart);
+    const to = fmtDateKey(addDays(weekStart, 4));
+    let cancelled = false;
+    fetchWeekWorklogs({ proxyUrl, from, to }).then((res) => {
+      if (cancelled) return;
+      if (res.ok) setRemoteWorklogs(res.items || []);
+      else {
+        console.warn("Fetch worklogs failed:", res.error);
+        setRemoteWorklogs([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loaded, settings.jira?.enabled, settings.jira?.proxyUrl, weekStart]);
+
   // ----- Dérivés -----
   const days = useMemo(
     () => Array.from({ length: 5 }, (_, i) => addDays(weekStart, i)),
@@ -81,23 +118,72 @@ export default function TimeTracker() {
   const dayEndMin = minutesFromHHMM(settings.dayEnd);
   const jiraEnabled = !!settings.jira?.enabled;
 
+  // Convertit les worklogs Jira fetched en "entries virtuelles" pour l'affichage.
+  // Dédup contre les entrées locales déjà synchronisées (par worklogId d'abord,
+  // puis fallback par combo issueKey+date+start pour les entrées poussées avant
+  // qu'on stocke le worklogId).
+  const remoteEntries = useMemo(() => {
+    const localSyncedIds = new Set(
+      entries.map((e) => e.jiraWorklogId).filter(Boolean)
+    );
+    const localSyncedCombos = new Set();
+    for (const e of entries) {
+      if (!e.syncedAt) continue;
+      const project = projects.find((p) => p.id === e.projectId);
+      const key = e.jiraKey || project?.jiraKey;
+      if (key) localSyncedCombos.add(`${key}|${e.date}|${e.start}`);
+    }
+
+    const out = [];
+    for (const item of remoteWorklogs) {
+      for (const w of item.worklogs) {
+        if (localSyncedIds.has(w.id)) continue;
+        const started = new Date(w.started);
+        const date = fmtDateKey(started);
+        const startMin = started.getHours() * 60 + started.getMinutes();
+        const start = hhmmFromMinutes(startMin);
+        if (localSyncedCombos.has(`${item.issueKey}|${date}|${start}`)) continue;
+        const endMin = startMin + Math.floor(w.timeSpentSeconds / 60);
+        out.push({
+          id: `remote_${w.id}`,
+          isRemote: true,
+          projectId: null,
+          date,
+          start,
+          end: hhmmFromMinutes(endMin),
+          title: w.comment || "",
+          jiraKey: item.issueKey,
+          jiraSummary: item.issueSummary,
+          jiraProjectKey: item.projectKey,
+          syncedAt: w.started,
+        });
+      }
+    }
+    return out;
+  }, [remoteWorklogs, entries, projects]);
+
+  const allEntries = useMemo(
+    () => [...entries, ...remoteEntries],
+    [entries, remoteEntries]
+  );
+
   const entriesByDay = useMemo(() => {
     const map = {};
-    for (const e of entries) {
+    for (const e of allEntries) {
       if (!map[e.date]) map[e.date] = [];
       map[e.date].push(e);
     }
     return map;
-  }, [entries]);
+  }, [allEntries]);
 
   const totalsByDay = useMemo(() => {
     const map = {};
-    for (const e of entries) {
+    for (const e of allEntries) {
       const d = minutesFromHHMM(e.end) - minutesFromHHMM(e.start);
       map[e.date] = (map[e.date] || 0) + Math.max(0, d);
     }
     return map;
-  }, [entries]);
+  }, [allEntries]);
 
   const weekTotal = useMemo(
     () => days.reduce((acc, d) => acc + (totalsByDay[fmtDateKey(d)] || 0), 0),
@@ -180,6 +266,38 @@ export default function TimeTracker() {
     if (form.projectId === id) setForm((f) => ({ ...f, projectId: "" }));
   };
 
+  // Auto-push d'une entrée vers Jira après création (si éligible).
+  // Async fire-and-forget : on n'attend pas dans le caller pour ne pas geler l'UI.
+  // En cas d'échec, alerte simple ; en cas de succès, on patch syncedAt + jiraWorklogId.
+  const maybePushEntry = async (entry) => {
+    const proxyUrl = settings.jira?.proxyUrl?.trim();
+    if (!jiraEnabled || !proxyUrl) return;
+    const project = projects.find((p) => p.id === entry.projectId);
+    const effectiveKey = entry.jiraKey || project?.jiraKey || "";
+    if (!isValidIssueKey(effectiveKey)) return;
+
+    const result = await pushEntryToJira({ entry, project, proxyUrl });
+    if (result.ok) {
+      setEntries((arr) =>
+        arr.map((e) =>
+          e.id === entry.id
+            ? {
+                ...e,
+                syncedAt: new Date().toISOString(),
+                ...(result.worklogId
+                  ? { jiraWorklogId: result.worklogId }
+                  : {}),
+              }
+            : e
+        )
+      );
+    } else {
+      alert(
+        `Entrée ajoutée localement mais le push Jira a échoué :\n${result.error}\n\nTu pourras retenter via "Pousser N sur Jira".`
+      );
+    }
+  };
+
   // ----- Handlers : entrées -----
   const addEntry = () => {
     if (!form.projectId) {
@@ -192,18 +310,17 @@ export default function TimeTracker() {
       alert("L'heure de fin doit être après l'heure de début.");
       return;
     }
-    setEntries((arr) => [
-      ...arr,
-      {
-        id: `e_${Date.now()}`,
-        projectId: form.projectId,
-        date: selectedDay,
-        start: form.start,
-        end: form.end,
-        title: form.title.trim(),
-      },
-    ]);
+    const entry = {
+      id: `e_${Date.now()}`,
+      projectId: form.projectId,
+      date: selectedDay,
+      start: form.start,
+      end: form.end,
+      title: form.title.trim(),
+    };
+    setEntries((arr) => [...arr, entry]);
     setForm((f) => ({ ...f, title: "" }));
+    maybePushEntry(entry);
   };
 
   const removeEntry = (id) => {
@@ -251,19 +368,18 @@ export default function TimeTracker() {
     const overrideKey =
       typedKey && typedKey !== projectDefaultKey ? typedKey : undefined;
 
-    setEntries((arr) => [
-      ...arr,
-      {
-        id: `e_${Date.now()}`,
-        projectId: addModal.projectId,
-        date: addModal.date,
-        start: addModal.start,
-        end: addModal.end,
-        title: addModal.title.trim(),
-        ...(overrideKey ? { jiraKey: overrideKey } : {}),
-      },
-    ]);
+    const newEntry = {
+      id: `e_${Date.now()}`,
+      projectId: addModal.projectId,
+      date: addModal.date,
+      start: addModal.start,
+      end: addModal.end,
+      title: addModal.title.trim(),
+      ...(overrideKey ? { jiraKey: overrideKey } : {}),
+    };
+    setEntries((arr) => [...arr, newEntry]);
     setAddModal(null);
+    maybePushEntry(newEntry);
   };
 
   // ----- Handlers : resize au drag -----
@@ -289,18 +405,29 @@ export default function TimeTracker() {
       setEntries((arr) =>
         arr.map((e) => {
           if (e.id !== resizing.id) return e;
+          // Si déjà synced, marquer comme modifiée pour que le bouton de batch
+          // l'inclue dans la prochaine sync (en mode PUT).
+          const dirtyFlag = e.syncedAt ? { dirtySinceSync: true } : {};
           if (resizing.edge === "top") {
             const newStart = Math.max(
               dayStartMin,
               Math.min(resizing.origStart + deltaMin, resizing.origEnd - SNAP_MIN)
             );
-            return { ...e, start: hhmmFromMinutes(newStart) };
+            return {
+              ...e,
+              start: hhmmFromMinutes(newStart),
+              ...dirtyFlag,
+            };
           }
           const newEnd = Math.max(
             resizing.origStart + SNAP_MIN,
             Math.min(resizing.origEnd + deltaMin, dayEndMin)
           );
-          return { ...e, end: hhmmFromMinutes(newEnd) };
+          return {
+            ...e,
+            end: hhmmFromMinutes(newEnd),
+            ...dirtyFlag,
+          };
         })
       );
     };
@@ -338,9 +465,18 @@ export default function TimeTracker() {
     const results = [];
     for (const entry of pushableThisWeek) {
       const project = projects.find((p) => p.id === entry.projectId);
+      // PUT (update) si déjà sync avec un worklogId connu, sinon POST (create)
+      const isUpdate = !!(entry.syncedAt && entry.jiraWorklogId);
       // eslint-disable-next-line no-await-in-loop
-      const result = await pushEntryToJira({ entry, project, proxyUrl });
-      results.push({ entryId: entry.id, ...result });
+      const result = isUpdate
+        ? await updateJiraWorklog({
+            entry,
+            project,
+            proxyUrl,
+            worklogId: entry.jiraWorklogId,
+          })
+        : await pushEntryToJira({ entry, project, proxyUrl });
+      results.push({ entryId: entry.id, isUpdate, ...result });
       setPushState((s) =>
         s ? { ...s, done: s.done + 1 } : null
       );
@@ -350,7 +486,15 @@ export default function TimeTracker() {
     setEntries((arr) =>
       arr.map((e) => {
         const r = results.find((x) => x.entryId === e.id);
-        return r?.ok ? { ...e, syncedAt: nowISO } : e;
+        if (!r?.ok) return e;
+        // dirtySinceSync est explicitement effacé via undefined (sera retiré
+        // de l'objet sauvé en localStorage grâce à JSON.stringify).
+        return {
+          ...e,
+          syncedAt: nowISO,
+          dirtySinceSync: undefined,
+          ...(r.worklogId ? { jiraWorklogId: r.worklogId } : {}),
+        };
       })
     );
     setPushState(null);
@@ -498,6 +642,29 @@ export default function TimeTracker() {
         jiraEnabled={jiraEnabled}
         onSubmit={submitAddModal}
         onClose={() => setAddModal(null)}
+        onOpenCreateIssue={(prefill) =>
+          setCreateIssueModal({
+            jiraProjectKey: prefill?.jiraProjectKey || "",
+            issueTypeName: "",
+            parentKey: "",
+            summary: prefill?.summary || "",
+            description: "",
+            labels: "",
+          })
+        }
+      />
+
+      {/* CreateIssueModal en dernier pour passer au-dessus de l'AddEntryModal.
+          Toujours ouvert depuis AddEntryModal, donc on injecte direct la clé créée
+          dans l'entrée en cours d'édition. */}
+      <CreateIssueModal
+        state={createIssueModal}
+        setState={setCreateIssueModal}
+        proxyUrl={settings.jira?.proxyUrl || ""}
+        onClose={() => setCreateIssueModal(null)}
+        onCreated={(newKey) =>
+          setAddModal((m) => (m ? { ...m, jiraKey: newKey } : m))
+        }
       />
     </div>
   );

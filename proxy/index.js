@@ -37,6 +37,30 @@ app.use(express.json({ limit: "16kb" }));
 
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
+// Helper : appelle Jira en GET et retourne JSON ou propage l'erreur.
+async function jiraGet(path) {
+  const url = `${JIRA_BASE_URL.replace(/\/$/, "")}${path}`;
+  console.log(`→ GET ${path}`);
+  const r = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: authHeader, Accept: "application/json" },
+  });
+  const body = await r.text();
+  if (!r.ok) {
+    console.error(`← ${r.status} on ${path}: ${body.slice(0, 200)}`);
+    const err = new Error(`Jira ${r.status}`);
+    err.status = r.status;
+    err.body = body.slice(0, 500);
+    err.path = path;
+    throw err;
+  }
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
+}
+
 // Liste les "espaces" (projects) Jira accessibles au compte du token.
 // Retourne [{ key, name, projectTypeKey }] — pagination ignorée (limite 50 par défaut, suffisant en usage perso).
 app.get("/api/jira-projects", async (_req, res) => {
@@ -92,6 +116,208 @@ const buildAdfComment = (text) => ({
   ],
 });
 
+// Liste les types d'issue disponibles pour un espace donné.
+// Retourne [{ id, name, subtask }] — utilisé pour peupler le dropdown du modal de création.
+app.get("/api/jira-issuetypes", async (req, res) => {
+  const { projectKey } = req.query;
+  if (!projectKey) return res.status(400).json({ error: "projectKey requis" });
+  try {
+    // Nouvel endpoint (l'ancien /issue/createmeta?expand=... a été dégagé).
+    const data = await jiraGet(
+      `/rest/api/3/issue/createmeta/${encodeURIComponent(
+        projectKey
+      )}/issuetypes`
+    );
+    // Le nouveau endpoint retourne soit { issueTypes: [...] } soit { values: [...] }
+    // selon la version. On gère les deux.
+    const raw = data.issueTypes || data.values || [];
+    const types = raw.map((t) => ({
+      id: t.id,
+      name: t.name,
+      subtask: !!t.subtask,
+    }));
+    res.json({ ok: true, issuetypes: types });
+  } catch (e) {
+    console.error("Proxy error (issuetypes):", e);
+    res
+      .status(e.status || 502)
+      .json({
+        error: "Jira API error",
+        details: e.body || String(e),
+        calledPath: e.path,
+      });
+  }
+});
+
+// Liste les Epics d'un espace (utile pour choisir le parent d'une Story/Tâche).
+app.get("/api/jira-epics", async (req, res) => {
+  const { projectKey } = req.query;
+  if (!projectKey) return res.status(400).json({ error: "projectKey requis" });
+  const jql = `project="${projectKey}" AND issuetype=Epic ORDER BY created DESC`;
+  try {
+    // Nouvelle API /search/jql (l'ancienne /search a été dégagée — HTTP 410).
+    // Pagination cursor-based via nextPageToken, on prend juste la 1ère page (50 max).
+    const data = await jiraGet(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(
+        jql
+      )}&fields=summary,status&maxResults=50`
+    );
+    const epics = (data.issues || []).map((i) => ({
+      key: i.key,
+      summary: i.fields?.summary || "",
+      status: i.fields?.status?.name || "",
+    }));
+    res.json({ ok: true, epics, isLast: data.isLast });
+  } catch (e) {
+    console.error("Proxy error (epics):", e);
+    res
+      .status(e.status || 502)
+      .json({
+        error: "Jira API error",
+        details: e.body || String(e),
+        calledPath: e.path,
+      });
+  }
+});
+
+// Crée un ticket Jira (Epic, Story, Tâche, …).
+// Body : { projectKey, issueTypeName, summary, description?, parentKey?, labels? }
+app.post("/api/jira-issue", async (req, res) => {
+  const { projectKey, issueTypeName, summary, description, parentKey, labels } =
+    req.body || {};
+
+  if (!projectKey || typeof projectKey !== "string") {
+    return res.status(400).json({ error: "projectKey requis (string)" });
+  }
+  if (!issueTypeName || typeof issueTypeName !== "string") {
+    return res.status(400).json({ error: "issueTypeName requis (string)" });
+  }
+  if (!summary || typeof summary !== "string" || summary.trim().length < 3) {
+    return res.status(400).json({ error: "summary requis (≥ 3 caractères)" });
+  }
+
+  const fields = {
+    project: { key: projectKey },
+    issuetype: { name: issueTypeName },
+    summary: summary.trim(),
+  };
+  if (description && String(description).trim()) {
+    fields.description = buildAdfComment(String(description).trim());
+  }
+  if (parentKey && typeof parentKey === "string") {
+    fields.parent = { key: parentKey };
+  }
+  if (Array.isArray(labels) && labels.length > 0) {
+    fields.labels = labels
+      .map((l) => String(l).trim())
+      .filter(Boolean)
+      // Jira interdit les espaces dans les labels
+      .map((l) => l.replace(/\s+/g, "-"));
+  }
+
+  const url = `${JIRA_BASE_URL.replace(/\/$/, "")}/rest/api/3/issue`;
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ fields }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return res.status(r.status).json({
+        error: "Jira API error",
+        status: r.status,
+        details: text.slice(0, 500),
+      });
+    }
+    const data = await r.json();
+    res.json({ ok: true, key: data.key, id: data.id });
+  } catch (e) {
+    console.error("Proxy error (create issue):", e);
+    res.status(502).json({ error: "Proxy error", details: String(e) });
+  }
+});
+
+// Extrait le texte simple d'un objet ADF (Atlassian Document Format).
+// Utile pour ramener un comment Jira au format text plain côté client.
+function extractAdfText(adf) {
+  if (!adf) return "";
+  if (typeof adf === "string") return adf;
+  if (!adf.content) return "";
+  const out = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.type === "text" && node.text) out.push(node.text);
+    if (Array.isArray(node.content)) node.content.forEach(walk);
+  };
+  walk(adf);
+  return out.join(" ").trim();
+}
+
+// Liste les worklogs de l'utilisateur courant sur une plage de dates [from, to] (YYYY-MM-DD).
+// Stratégie : 1) JQL pour trouver les issues ayant des worklogs dans la plage,
+// 2) pour chaque issue, fetch ses worklogs filtrés par auteur + date.
+app.get("/api/jira-week-worklogs", async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to)
+    return res.status(400).json({ error: "from et to requis (YYYY-MM-DD)" });
+
+  try {
+    // 1) Récupère l'accountId du user (pour filtrer les worklogs)
+    const me = await jiraGet(`/rest/api/3/myself`);
+    const myAccountId = me.accountId;
+
+    // 2) Cherche les issues qui ont des worklogs de moi dans la plage
+    const jql = `worklogAuthor = currentUser() AND worklogDate >= "${from}" AND worklogDate <= "${to}"`;
+    const search = await jiraGet(
+      `/rest/api/3/search/jql?jql=${encodeURIComponent(
+        jql
+      )}&fields=summary,project&maxResults=100`
+    );
+
+    // 3) Pour chaque issue, fetch ses worklogs filtrés par date + auteur
+    const fromTs = new Date(`${from}T00:00:00`).getTime();
+    const toTs = new Date(`${to}T23:59:59`).getTime();
+    const items = [];
+
+    for (const issue of search.issues || []) {
+      const worklogsData = await jiraGet(
+        `/rest/api/3/issue/${encodeURIComponent(
+          issue.key
+        )}/worklog?startedAfter=${fromTs}&startedBefore=${toTs}`
+      );
+      const mine = (worklogsData.worklogs || [])
+        .filter((w) => w.author?.accountId === myAccountId)
+        .map((w) => ({
+          id: w.id,
+          started: w.started,
+          timeSpentSeconds: w.timeSpentSeconds,
+          comment: extractAdfText(w.comment),
+        }));
+      if (mine.length === 0) continue;
+      items.push({
+        issueKey: issue.key,
+        issueSummary: issue.fields?.summary || "",
+        projectKey: issue.fields?.project?.key || "",
+        worklogs: mine,
+      });
+    }
+
+    res.json({ ok: true, items });
+  } catch (e) {
+    console.error("Proxy error (week-worklogs):", e);
+    res.status(e.status || 502).json({
+      error: "Jira API error",
+      details: e.body || String(e),
+      calledPath: e.path,
+    });
+  }
+});
+
 app.post("/api/jira-worklog", async (req, res) => {
   const { issueKey, startedISO, timeSpentSeconds, comment } = req.body || {};
 
@@ -145,6 +371,64 @@ app.post("/api/jira-worklog", async (req, res) => {
     res.json({ ok: true, worklogId: data.id });
   } catch (e) {
     console.error("Proxy error:", e);
+    res.status(502).json({ error: "Proxy error", details: String(e) });
+  }
+});
+
+// Update (PUT) d'un worklog existant — utilisé quand on a resize une entrée
+// déjà synced et qu'on veut propager la nouvelle plage horaire à Jira.
+// Body : { issueKey, startedISO, timeSpentSeconds, comment? }
+app.put("/api/jira-worklog/:worklogId", async (req, res) => {
+  const { worklogId } = req.params;
+  const { issueKey, startedISO, timeSpentSeconds, comment } = req.body || {};
+
+  if (!issueKey) return res.status(400).json({ error: "issueKey requis" });
+  if (!startedISO) return res.status(400).json({ error: "startedISO requis" });
+  if (!Number.isInteger(timeSpentSeconds) || timeSpentSeconds < 60) {
+    return res
+      .status(400)
+      .json({ error: "timeSpentSeconds requis (entier ≥ 60)" });
+  }
+
+  let started;
+  try {
+    started = formatJiraDate(startedISO);
+  } catch {
+    return res.status(400).json({ error: "startedISO invalide" });
+  }
+
+  const url = `${JIRA_BASE_URL.replace(/\/$/, "")}/rest/api/3/issue/${encodeURIComponent(
+    issueKey
+  )}/worklog/${encodeURIComponent(worklogId)}`;
+
+  try {
+    console.log(`→ PUT /rest/api/3/issue/${issueKey}/worklog/${worklogId}`);
+    const r = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        timeSpentSeconds,
+        started,
+        ...(comment ? { comment: buildAdfComment(String(comment)) } : {}),
+      }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      console.error(`← ${r.status} on PUT worklog: ${text.slice(0, 200)}`);
+      return res.status(r.status).json({
+        error: "Jira API error",
+        status: r.status,
+        details: text.slice(0, 500),
+      });
+    }
+    const data = await r.json();
+    res.json({ ok: true, worklogId: data.id });
+  } catch (e) {
+    console.error("Proxy error (update worklog):", e);
     res.status(502).json({ error: "Proxy error", details: String(e) });
   }
 });

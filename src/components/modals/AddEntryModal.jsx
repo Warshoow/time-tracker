@@ -16,6 +16,7 @@ export default function AddEntryModal({
   jiraEnabled,
   onSubmit,
   onClose,
+  onOpenCreateIssue, // optionnel : ouvre le modal de création de ticket Jira
 }) {
   if (!state) return null;
 
@@ -138,7 +139,41 @@ export default function AddEntryModal({
 
           {jiraEnabled && (
             <div>
-              <label className="label">Issue Jira (optionnel)</label>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "baseline",
+                }}
+              >
+                <label className="label">Issue Jira (optionnel)</label>
+                {onOpenCreateIssue && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const project = projects.find(
+                        (p) => p.id === state.projectId
+                      );
+                      onOpenCreateIssue({
+                        jiraProjectKey: project?.jiraProjectKey || "",
+                        summary: state.title || "",
+                      });
+                    }}
+                    style={{
+                      fontSize: 11,
+                      color: "#c9472b",
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: 0,
+                      marginBottom: 6,
+                    }}
+                    title="Créer un nouveau ticket Jira et l'utiliser ici"
+                  >
+                    + Nouveau ticket
+                  </button>
+                )}
+              </div>
               <input
                 className="input mono"
                 placeholder="ex. API-42"

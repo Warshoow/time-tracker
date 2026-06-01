@@ -60,6 +60,20 @@ export default function DayColumn({
   const effectiveJiraKey = (entry) =>
     entry.jiraKey || projectById(entry.projectId)?.jiraKey || "";
 
+  // Couleur d'une entrée distante : si un projet tracker est mappé à l'espace Jira,
+  // on prend sa couleur (cohérence visuelle). Sinon hash du projectKey.
+  const colorForRemote = (entry) => {
+    const localMatch = projects.find(
+      (p) => p.jiraProjectKey && p.jiraProjectKey === entry.jiraProjectKey
+    );
+    if (localMatch) return projectColor(localMatch.id);
+    const seed = (entry.jiraProjectKey || entry.jiraKey || "").split("").reduce(
+      (acc, c) => acc + c.charCodeAt(0),
+      0
+    );
+    return PROJECT_COLORS[seed % PROJECT_COLORS.length];
+  };
+
   return (
     <div
       onClick={onSelectDay}
@@ -131,19 +145,36 @@ export default function DayColumn({
           const widthPct = 100 / columns;
           const leftPct = col * widthPct;
 
+          // Pour une entrée remote (worklog Jira fetched), on n'a pas de projet local.
+          // On synthétise un objet projet-like pour l'affichage et on désactive les
+          // interactions (resize / delete) car la source de vérité est dans Jira.
+          const isRemote = !!e.isRemote;
+          const project = isRemote
+            ? { name: e.jiraSummary || e.jiraKey, isRemote: true }
+            : projectById(e.projectId);
+          const color = isRemote ? colorForRemote(e) : projectColor(e.projectId);
+          const keyToShow = isRemote
+            ? e.jiraKey
+            : jiraEnabled
+              ? effectiveJiraKey(e)
+              : "";
+
           return (
             <EntryBlock
               key={e.id}
               entry={e}
-              project={projectById(e.projectId)}
-              color={projectColor(e.projectId)}
+              project={project}
+              color={color}
               top={top}
               height={height}
               leftPct={leftPct}
               widthPct={widthPct}
-              jiraKey={jiraEnabled ? effectiveJiraKey(e) : ""}
-              onStartResize={(ev, edge) => onStartResize(ev, e, edge)}
-              onRemove={() => onRemoveEntry(e.id)}
+              jiraKey={keyToShow}
+              isRemote={isRemote}
+              onStartResize={
+                isRemote ? null : (ev, edge) => onStartResize(ev, e, edge)
+              }
+              onRemove={isRemote ? null : () => onRemoveEntry(e.id)}
             />
           );
         })}

@@ -14,6 +14,7 @@ export default function EntryBlock({
   leftPct,
   widthPct,
   jiraKey, // clé effective déjà résolue par le parent
+  isRemote, // entrée venant de Jira (lecture seule)
   onStartResize,
   onRemove,
 }) {
@@ -23,18 +24,27 @@ export default function EntryBlock({
   const layoutMode = dur <= 15 ? "compact" : dur < 60 ? "inline" : "full";
 
   const synced = !!entry.syncedAt;
+  const dirty = synced && !!entry.dirtySinceSync;
+  // marker : ⟳ si dirty (à re-sync), ✓ si propre, rien si pas encore sync
+  const marker = dirty ? " ⟳" : synced ? " ✓" : "";
+  const badgeOpacity = dirty ? 0.85 : synced ? 0.45 : 0.8;
+  const badgeTitle = dirty
+    ? "Modifiée depuis la dernière sync — clique sur 'Pousser sur Jira' pour mettre à jour"
+    : synced
+      ? `Synchronisé le ${entry.syncedAt}`
+      : "Non synchronisé";
   const jiraBadge = jiraKey && (
     <span
       className="mono"
       style={{
         fontSize: 9,
         color: color.bg,
-        opacity: synced ? 0.45 : 0.8,
+        opacity: badgeOpacity,
         marginLeft: 5,
       }}
-      title={synced ? `Synchronisé le ${entry.syncedAt}` : "Non synchronisé"}
+      title={badgeTitle}
     >
-      [{jiraKey}{synced ? " ✓" : ""}]
+      [{jiraKey}{marker}]
     </span>
   );
 
@@ -72,7 +82,7 @@ export default function EntryBlock({
 
   return (
     <div
-      className={`entry-block entry-${layoutMode} fade-in`}
+      className={`entry-block entry-${layoutMode} fade-in${isRemote ? " entry-remote" : ""}`}
       style={{
         top,
         height,
@@ -80,30 +90,38 @@ export default function EntryBlock({
         width: `calc(${widthPct}% - 6px)`,
         background: color.soft,
         borderLeftColor: color.bg,
+        ...(isRemote ? { borderLeftStyle: "dashed" } : {}),
       }}
       onClick={(ev) => ev.stopPropagation()}
       onContextMenu={(ev) => {
         ev.preventDefault();
         ev.stopPropagation();
       }}
+      title={isRemote ? "Worklog Jira (lecture seule)" : undefined}
     >
-      <div
-        className="resize-handle resize-top"
-        onMouseDown={(ev) => onStartResize(ev, "top")}
-        aria-label="Redimensionner début"
-      />
-      <div
-        className="resize-handle resize-bottom"
-        onMouseDown={(ev) => onStartResize(ev, "bottom")}
-        aria-label="Redimensionner fin"
-      />
-      <button
-        className="delete-btn"
-        onClick={onRemove}
-        aria-label="Supprimer"
-      >
-        <X size={11} />
-      </button>
+      {onStartResize && (
+        <>
+          <div
+            className="resize-handle resize-top"
+            onMouseDown={(ev) => onStartResize(ev, "top")}
+            aria-label="Redimensionner début"
+          />
+          <div
+            className="resize-handle resize-bottom"
+            onMouseDown={(ev) => onStartResize(ev, "bottom")}
+            aria-label="Redimensionner fin"
+          />
+        </>
+      )}
+      {onRemove && (
+        <button
+          className="delete-btn"
+          onClick={onRemove}
+          aria-label="Supprimer"
+        >
+          <X size={11} />
+        </button>
+      )}
 
       {layoutMode === "compact" && headerLine}
 

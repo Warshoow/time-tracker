@@ -45,30 +45,100 @@ export async function pushEntryToJira({ entry, project, proxyUrl }) {
   }
 }
 
-// Récupère la liste des espaces (projects) Jira via le proxy.
-// Retourne { ok, projects, error? } où projects = [{ key, name, projectTypeKey }].
-export async function fetchJiraProjects({ proxyUrl }) {
+// Helper interne : fetch JSON depuis le proxy avec gestion d'erreur uniforme.
+async function callProxy({ proxyUrl, path, method = "GET", body }) {
   if (!proxyUrl) return { ok: false, error: "URL proxy non configurée" };
   try {
-    const r = await fetch(
-      `${proxyUrl.replace(/\/$/, "")}/api/jira-projects`,
-      {
-        method: "GET",
-        headers: { Accept: "application/json" },
-      }
-    );
+    const r = await fetch(`${proxyUrl.replace(/\/$/, "")}${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      return {
-        ok: false,
-        error: data.error || data.details || `HTTP ${r.status}`,
-      };
+      const detail = data.details || data.error || `HTTP ${r.status}`;
+      const suffix = data.calledPath ? ` (URL : ${data.calledPath})` : "";
+      return { ok: false, error: `${detail}${suffix}` };
     }
-    const data = await r.json();
-    return { ok: true, projects: data.projects || [], total: data.total };
+    return data;
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
+}
+
+// Récupère la liste des espaces (projects) Jira via le proxy.
+// Retourne { ok, projects, error? } où projects = [{ key, name, projectTypeKey }].
+export async function fetchJiraProjects({ proxyUrl }) {
+  const data = await callProxy({ proxyUrl, path: "/api/jira-projects" });
+  if (!data.ok) return data;
+  return { ok: true, projects: data.projects || [], total: data.total };
+}
+
+// Liste les types d'issue disponibles pour un espace (Epic, Story, Tâche, etc.).
+export async function fetchJiraIssueTypes({ proxyUrl, projectKey }) {
+  if (!projectKey) return { ok: false, error: "projectKey requis" };
+  const data = await callProxy({
+    proxyUrl,
+    path: `/api/jira-issuetypes?projectKey=${encodeURIComponent(projectKey)}`,
+  });
+  if (!data.ok) return data;
+  return { ok: true, issuetypes: data.issuetypes || [] };
+}
+
+// Liste les Epics d'un espace (pour choisir le parent d'une Story/Tâche).
+export async function fetchJiraEpics({ proxyUrl, projectKey }) {
+  if (!projectKey) return { ok: false, error: "projectKey requis" };
+  const data = await callProxy({
+    proxyUrl,
+    path: `/api/jira-epics?projectKey=${encodeURIComponent(projectKey)}`,
+  });
+  if (!data.ok) return data;
+  return { ok: true, epics: data.epics || [] };
+}
+
+// Crée un ticket Jira. Retourne { ok, key?, error? }.
+export async function createJiraIssue({
+  proxyUrl,
+  projectKey,
+  issueTypeName,
+  summary,
+  description,
+  parentKey,
+  labels,
+}) {
+  return callProxy({
+    proxyUrl,
+    path: "/api/jira-issue",
+    method: "POST",
+    body: {
+      projectKey,
+      issueTypeName,
+      summary,
+      ...(description ? { description } : {}),
+      ...(parentKey ? { parentKey } : {}),
+      ...(labels && labels.length > 0 ? { labels } : {}),
+    },
+  });
+}
+
+// Une vraie clé d'issue Jira ressemble à BACK-42 : préfixe alpha + tiret + numéro.
+// Sert à filtrer les saisies incomplètes ("BACK-" ou vides) avant un push.
+export function isValidIssueKey(key) {
+  return /^[A-Z][A-Z0-9_]*-\d+$/.test(String(key || "").trim());
+}
+
+// Fetch les worklogs du user pour une plage de dates [from, to] (inclus).
+// Retourne { ok, items: [{ issueKey, issueSummary, projectKey, worklogs: [...] }] }
+export async function fetchWeekWorklogs({ proxyUrl, from, to }) {
+  const data = await callProxy({
+    proxyUrl,
+    path: `/api/jira-week-worklogs?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+  });
+  if (!data.ok) return data;
+  return { ok: true, items: data.items || [] };
 }
 
 // Valeur par défaut du champ jiraKey d'une entrée, dérivée du projet :
@@ -83,11 +153,51 @@ export function defaultEntryJiraKey(project) {
   return "";
 }
 
-// Liste les entrées poussables : ont une clé Jira effective, pas encore sync.
+// Met à jour un worklog existant via le proxy (PUT).
+// Retourne { ok, worklogId?, error? }.
+export async function updateJiraWorklog({
+  entry,
+  project,
+  proxyUrl,
+  worklogId,
+}) {
+  const issueKey = entry.jiraKey || project?.jiraKey || "";
+  if (!proxyUrl) return { ok: false, error: "URL proxy non configurée" };
+  if (!worklogId) return { ok: false, error: "worklogId requis" };
+  if (!issueKey) return { ok: false, error: "Issue Jira manquante" };
+
+  const startMin = minutesFromHHMM(entry.start);
+  const endMin = minutesFromHHMM(entry.end);
+  const durationSec = (endMin - startMin) * 60;
+  if (durationSec < 60) return { ok: false, error: "Durée < 1 minute" };
+
+  const startedISO = new Date(`${entry.date}T${entry.start}:00`).toISOString();
+
+  return callProxy({
+    proxyUrl,
+    path: `/api/jira-worklog/${encodeURIComponent(worklogId)}`,
+    method: "PUT",
+    body: {
+      issueKey,
+      startedISO,
+      timeSpentSeconds: durationSec,
+      comment: entry.title || "",
+    },
+  });
+}
+
+// Liste les entrées à pousser/synchroniser :
+//   - pas encore sync ET avec clé valide  → POST (création worklog)
+//   - sync mais modifiée depuis (dirtySinceSync) → PUT (mise à jour worklog)
 export function getPushableEntries(entries, projects) {
   return entries.filter((e) => {
-    if (e.syncedAt) return false;
-    const projectKey = projects.find((p) => p.id === e.projectId)?.jiraKey;
-    return !!(e.jiraKey || projectKey);
+    // Si pas sync, c'est une création potentielle
+    if (!e.syncedAt) {
+      const projectKey = projects.find((p) => p.id === e.projectId)?.jiraKey;
+      return !!(e.jiraKey || projectKey);
+    }
+    // Sync mais modifiée depuis : update
+    if (e.dirtySinceSync && e.jiraWorklogId) return true;
+    return false;
   });
 }
