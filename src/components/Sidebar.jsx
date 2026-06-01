@@ -260,7 +260,7 @@ export default function Sidebar({
                     title="Modifier le projet"
                   >
                     {p.name}
-                    {jiraEnabled && p.jiraKey && (
+                    {jiraEnabled && (p.jiraKey || p.jiraProjectKey) && (
                       <span
                         className="mono"
                         style={{
@@ -268,8 +268,15 @@ export default function Sidebar({
                           color: "#2a262080",
                           marginLeft: 6,
                         }}
+                        title={
+                          p.jiraKey
+                            ? "Issue par défaut"
+                            : p.jiraProjectName
+                              ? `Espace : ${p.jiraProjectName}`
+                              : "Espace Jira"
+                        }
                       >
-                        [{p.jiraKey}]
+                        [{p.jiraKey || p.jiraProjectKey}]
                       </span>
                     )}
                   </span>

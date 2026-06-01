@@ -5,6 +5,7 @@ import {
   minutesFromHHMM,
 } from "../../lib/date.js";
 import { DURATION_OPTIONS } from "../../lib/constants.js";
+import { defaultEntryJiraKey } from "../../lib/jira.js";
 
 // state : { date, projectId, title, jiraKey, start, end } | null
 export default function AddEntryModal({
@@ -97,22 +98,28 @@ export default function AddEntryModal({
               value={state.projectId}
               onChange={(ev) => {
                 const newId = ev.target.value;
-                const defaultKey =
-                  projects.find((p) => p.id === newId)?.jiraKey || "";
+                const newProject = projects.find((p) => p.id === newId);
                 setState((m) => ({
                   ...m,
                   projectId: newId,
-                  jiraKey: defaultKey,
+                  jiraKey: defaultEntryJiraKey(newProject),
                 }));
               }}
             >
               <option value="">— choisir —</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.jiraKey ? ` · ${p.jiraKey}` : ""}
-                </option>
-              ))}
+              {projects.map((p) => {
+                const suffix = p.jiraKey
+                  ? ` · ${p.jiraKey}`
+                  : p.jiraProjectKey
+                    ? ` · ${p.jiraProjectKey}`
+                    : "";
+                return (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {suffix}
+                  </option>
+                );
+              })}
             </select>
           </div>
 

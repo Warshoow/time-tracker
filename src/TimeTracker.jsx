@@ -8,7 +8,11 @@ import {
 } from "./lib/date.js";
 import { SNAP_MIN } from "./lib/constants.js";
 import { loadState, saveState } from "./lib/storage.js";
-import { pushEntryToJira, getPushableEntries } from "./lib/jira.js";
+import {
+  pushEntryToJira,
+  getPushableEntries,
+  defaultEntryJiraKey,
+} from "./lib/jira.js";
 import Sidebar from "./components/Sidebar.jsx";
 import Calendar from "./components/Calendar.jsx";
 import SettingsModal from "./components/modals/SettingsModal.jsx";
@@ -145,21 +149,24 @@ export default function TimeTracker() {
     const name = projectModal.name.trim();
     if (!name) return;
     const jiraKey = (projectModal.jiraKey || "").trim();
+    const jiraProjectKey = (projectModal.jiraProjectKey || "").trim();
+    const jiraProjectName = (projectModal.jiraProjectName || "").trim();
+
+    const patch = {
+      name,
+      jiraKey: jiraKey || undefined,
+      jiraProjectKey: jiraProjectKey || undefined,
+      jiraProjectName: jiraProjectName || undefined,
+    };
 
     if (projectModal.id) {
       setProjects((arr) =>
-        arr.map((p) =>
-          p.id === projectModal.id
-            ? { ...p, name, jiraKey: jiraKey || undefined }
-            : p
-        )
+        arr.map((p) => (p.id === projectModal.id ? { ...p, ...patch } : p))
       );
     } else {
-      const p = {
-        id: `p_${Date.now()}`,
-        name,
-        ...(jiraKey ? { jiraKey } : {}),
-      };
+      const p = { id: `p_${Date.now()}`, ...patch };
+      // Nettoyage des undefined pour ne pas polluer le localStorage
+      Object.keys(p).forEach((k) => p[k] === undefined && delete p[k]);
       setProjects((arr) => [...arr, p]);
       if (!form.projectId) setForm((f) => ({ ...f, projectId: p.id }));
     }
@@ -211,8 +218,8 @@ export default function TimeTracker() {
     );
     const endMin = Math.min(startMin + 60, dayEndMin);
     const initialProjectId = form.projectId || projects[0]?.id || "";
-    const initialJiraKey =
-      projects.find((p) => p.id === initialProjectId)?.jiraKey || "";
+    const initialProject = projects.find((p) => p.id === initialProjectId);
+    const initialJiraKey = defaultEntryJiraKey(initialProject);
     setHoverPos(null);
     setAddModal({
       date,
@@ -236,9 +243,11 @@ export default function TimeTracker() {
       alert("L'heure de fin doit être après l'heure de début.");
       return;
     }
-    const projectDefaultKey =
-      projects.find((p) => p.id === addModal.projectId)?.jiraKey || "";
+    const project = projects.find((p) => p.id === addModal.projectId);
+    const projectDefaultKey = defaultEntryJiraKey(project);
     const typedKey = (addModal.jiraKey || "").trim();
+    // On stocke sur l'entrée seulement si la clé saisie diffère du défaut du projet
+    // (qui peut être soit une issue explicite, soit un préfixe "{ESPACE}-").
     const overrideKey =
       typedKey && typedKey !== projectDefaultKey ? typedKey : undefined;
 
@@ -414,13 +423,20 @@ export default function TimeTracker() {
           jiraEnabled={jiraEnabled}
           onAddEntry={addEntry}
           onOpenCreateProject={() =>
-            setProjectModal({ name: "", jiraKey: "" })
+            setProjectModal({
+              name: "",
+              jiraKey: "",
+              jiraProjectKey: "",
+              jiraProjectName: "",
+            })
           }
           onOpenEditProject={(p) =>
             setProjectModal({
               id: p.id,
               name: p.name,
               jiraKey: p.jiraKey || "",
+              jiraProjectKey: p.jiraProjectKey || "",
+              jiraProjectName: p.jiraProjectName || "",
             })
           }
           onRemoveProject={removeProject}
@@ -469,6 +485,7 @@ export default function TimeTracker() {
         state={projectModal}
         setState={setProjectModal}
         jiraEnabled={jiraEnabled}
+        proxyUrl={settings.jira?.proxyUrl || ""}
         onSubmit={submitProjectModal}
         onClose={() => setProjectModal(null)}
       />

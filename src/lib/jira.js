@@ -45,6 +45,44 @@ export async function pushEntryToJira({ entry, project, proxyUrl }) {
   }
 }
 
+// Récupère la liste des espaces (projects) Jira via le proxy.
+// Retourne { ok, projects, error? } où projects = [{ key, name, projectTypeKey }].
+export async function fetchJiraProjects({ proxyUrl }) {
+  if (!proxyUrl) return { ok: false, error: "URL proxy non configurée" };
+  try {
+    const r = await fetch(
+      `${proxyUrl.replace(/\/$/, "")}/api/jira-projects`,
+      {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      }
+    );
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      return {
+        ok: false,
+        error: data.error || data.details || `HTTP ${r.status}`,
+      };
+    }
+    const data = await r.json();
+    return { ok: true, projects: data.projects || [], total: data.total };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+// Valeur par défaut du champ jiraKey d'une entrée, dérivée du projet :
+//   - si le projet a une issue explicite (jiraKey) → on l'utilise telle quelle
+//   - sinon si le projet pointe vers un espace (jiraProjectKey) → on renvoie "{KEY}-"
+//     pour que l'utilisateur n'ait plus qu'à taper le numéro
+//   - sinon "" (vide, à saisir manuellement)
+export function defaultEntryJiraKey(project) {
+  if (!project) return "";
+  if (project.jiraKey) return project.jiraKey;
+  if (project.jiraProjectKey) return `${project.jiraProjectKey}-`;
+  return "";
+}
+
 // Liste les entrées poussables : ont une clé Jira effective, pas encore sync.
 export function getPushableEntries(entries, projects) {
   return entries.filter((e) => {
