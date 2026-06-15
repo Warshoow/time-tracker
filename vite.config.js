@@ -7,7 +7,6 @@ export default defineConfig(({ command }) => ({
   plugins: [react()],
   base: command === "build" ? "/time-tracker/" : "/",
   server: {
-    port: 5173,
-    open: true,
+    port: 5173
   },
 }));
