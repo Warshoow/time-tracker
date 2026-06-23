@@ -344,10 +344,12 @@ app.post("/api/jira-issue-link", async (req, res) => {
 });
 
 // Crée un ticket Jira (Epic, Story, Tâche, …).
-// Body : { projectKey, issueTypeName, summary, description?, parentKey?, labels?, sprintId? }
+// Body : { projectKey, issueTypeId?, issueTypeName?, summary, description?, parentKey?, labels?, sprintId? }
+// issueTypeId est préféré à issueTypeName (résiste aux renames côté Jira).
 app.post("/api/jira-issue", async (req, res) => {
   const {
     projectKey,
+    issueTypeId,
     issueTypeName,
     summary,
     description,
@@ -359,8 +361,10 @@ app.post("/api/jira-issue", async (req, res) => {
   if (!projectKey || typeof projectKey !== "string") {
     return res.status(400).json({ error: "projectKey requis (string)" });
   }
-  if (!issueTypeName || typeof issueTypeName !== "string") {
-    return res.status(400).json({ error: "issueTypeName requis (string)" });
+  if (!issueTypeId && !issueTypeName) {
+    return res
+      .status(400)
+      .json({ error: "issueTypeId ou issueTypeName requis" });
   }
   if (!summary || typeof summary !== "string" || summary.trim().length < 3) {
     return res.status(400).json({ error: "summary requis (≥ 3 caractères)" });
@@ -368,7 +372,8 @@ app.post("/api/jira-issue", async (req, res) => {
 
   const fields = {
     project: { key: projectKey },
-    issuetype: { name: issueTypeName },
+    // Préfère id à name : si l'admin Jira renomme un type, l'id reste stable.
+    issuetype: issueTypeId ? { id: issueTypeId } : { name: issueTypeName },
     summary: summary.trim(),
   };
   if (description && String(description).trim()) {

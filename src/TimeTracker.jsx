@@ -650,6 +650,7 @@ export default function TimeTracker() {
         onOpenCreateIssue={(prefill) =>
           setCreateIssueModal({
             jiraProjectKey: prefill?.jiraProjectKey || "",
+            issueTypeId: "",
             issueTypeName: "",
             parentKey: "",
             summary: prefill?.summary || "",

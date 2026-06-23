@@ -173,11 +173,23 @@ export default function CreateIssueModal({
   const createNewStoryInline = async () => {
     const title = newStoryTitle.trim();
     if (title.length < 3) return;
+    // Découvre l'id du type "Story" depuis la liste fetched (résiste aux
+    // renames Jira type "Récit" / autre).
+    const storyType = (issuetypes?.issuetypes || []).find(
+      (t) => t.name?.toLowerCase() === "story"
+    );
+    if (!storyType) {
+      alert(
+        "Aucun type 'Story' disponible dans cet espace. Vérifie la config Jira."
+      );
+      return;
+    }
     setCreatingStory(true);
     const res = await createJiraIssue({
       proxyUrl,
       projectKey: state.jiraProjectKey,
-      issueTypeName: "Story",
+      issueTypeId: storyType.id,
+      issueTypeName: storyType.name,
       summary: title,
       parentKey: state.parentKey || undefined,
     });
@@ -215,6 +227,7 @@ export default function CreateIssueModal({
     const res = await createJiraIssue({
       proxyUrl,
       projectKey: state.jiraProjectKey,
+      issueTypeId: state.issueTypeId,
       issueTypeName: state.issueTypeName,
       summary: state.summary,
       description: state.description,
@@ -338,22 +351,26 @@ export default function CreateIssueModal({
               ) : issuetypes?.ok ? (
                 <select
                   className="select"
-                  value={state.issueTypeName}
-                  onChange={(e) =>
+                  // value est l'id (stable, immutable même si renommé côté Jira)
+                  value={state.issueTypeId || ""}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const t = issuetypes.issuetypes.find((x) => x.id === id);
                     setState((m) => ({
                       ...m,
-                      issueTypeName: e.target.value,
+                      issueTypeId: id,
+                      issueTypeName: t?.name || "",
                       parentKey: "",
                       linkToStoryKey: "",
                       linkTypeName: "",
-                    }))
-                  }
+                    }));
+                  }}
                 >
                   <option value="">— choisir —</option>
                   {issuetypes.issuetypes
                     .filter((t) => !t.subtask)
                     .map((t) => (
-                      <option key={t.id} value={t.name}>
+                      <option key={t.id} value={t.id}>
                         {t.name}
                       </option>
                     ))}

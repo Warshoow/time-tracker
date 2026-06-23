@@ -144,9 +144,12 @@ export async function createJiraIssueLink({
 }
 
 // Crée un ticket Jira. Retourne { ok, key?, sprintWarning?, error? }.
+// issueTypeId est préféré quand dispo (plus robuste face aux renames côté Jira).
+// issueTypeName est gardé en fallback.
 export async function createJiraIssue({
   proxyUrl,
   projectKey,
+  issueTypeId,
   issueTypeName,
   summary,
   description,
@@ -160,7 +163,8 @@ export async function createJiraIssue({
     method: "POST",
     body: {
       projectKey,
-      issueTypeName,
+      ...(issueTypeId ? { issueTypeId } : {}),
+      ...(issueTypeName ? { issueTypeName } : {}),
       summary,
       ...(description ? { description } : {}),
       ...(parentKey ? { parentKey } : {}),
