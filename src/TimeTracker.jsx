@@ -195,30 +195,66 @@ export default function TimeTracker() {
 
   const weekEntriesCount = useMemo(
     () =>
-      entries.filter((e) => days.some((d) => fmtDateKey(d) === e.date)).length,
-    [entries, days]
+      allEntries.filter((e) => days.some((d) => fmtDateKey(d) === e.date)).length,
+    [allEntries, days]
   );
 
   const recap = useMemo(() => {
     const dayKeys = days.map(fmtDateKey);
-    return projects
-      .map((p) => {
-        const perDay = dayKeys.map((k) =>
-          entries
-            .filter((e) => e.projectId === p.id && e.date === k)
-            .reduce(
-              (acc, e) =>
-                acc +
-                Math.max(0, minutesFromHHMM(e.end) - minutesFromHHMM(e.start)),
-              0
-            )
-        );
-        const total = perDay.reduce((a, b) => a + b, 0);
-        return { project: p, perDay, total };
-      })
-      .filter((r) => r.total > 0)
-      .sort((a, b) => b.total - a.total);
-  }, [projects, entries, days]);
+
+    // Index des entrées remote par jiraProjectKey pour matcher avec les projets tracker
+    const remotesByJiraKey = new Map();
+    for (const r of remoteEntries) {
+      const k = r.jiraProjectKey;
+      if (!k) continue;
+      if (!remotesByJiraKey.has(k)) remotesByJiraKey.set(k, []);
+      remotesByJiraKey.get(k).push(r);
+    }
+    const claimedJiraKeys = new Set();
+
+    const durationOf = (e) =>
+      Math.max(0, minutesFromHHMM(e.end) - minutesFromHHMM(e.start));
+
+    // Lignes pour les projets tracker — combinent local + remote du même espace Jira
+    const rows = projects.map((p) => {
+      if (p.jiraProjectKey) claimedJiraKeys.add(p.jiraProjectKey);
+      const matchingRemotes = p.jiraProjectKey
+        ? remotesByJiraKey.get(p.jiraProjectKey) || []
+        : [];
+      const perDay = dayKeys.map((k) => {
+        const local = entries
+          .filter((e) => e.projectId === p.id && e.date === k)
+          .reduce((acc, e) => acc + durationOf(e), 0);
+        const remote = matchingRemotes
+          .filter((e) => e.date === k)
+          .reduce((acc, e) => acc + durationOf(e), 0);
+        return local + remote;
+      });
+      return { project: p, perDay, total: perDay.reduce((a, b) => a + b, 0) };
+    });
+
+    // Lignes synthétiques pour les espaces Jira dont aucun projet tracker n'est mappé.
+    // On les affiche quand même pour que le temps remonte dans le récap.
+    for (const [jiraKey, items] of remotesByJiraKey) {
+      if (claimedJiraKeys.has(jiraKey)) continue;
+      const perDay = dayKeys.map((k) =>
+        items.filter((e) => e.date === k).reduce((acc, e) => acc + durationOf(e), 0)
+      );
+      const total = perDay.reduce((a, b) => a + b, 0);
+      if (total === 0) continue;
+      rows.push({
+        project: {
+          id: `__jira_${jiraKey}`,
+          name: `Jira · ${jiraKey}`,
+          isRemoteGroup: true,
+        },
+        perDay,
+        total,
+      });
+    }
+
+    return rows.filter((r) => r.total > 0).sort((a, b) => b.total - a.total);
+  }, [projects, entries, remoteEntries, days]);
 
   const formDuration =
     minutesFromHHMM(form.end) - minutesFromHHMM(form.start);

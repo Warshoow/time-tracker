@@ -24,6 +24,17 @@ export default function RecapPanel({
     return PROJECT_COLORS[idx % PROJECT_COLORS.length] || PROJECT_COLORS[0];
   };
 
+  // Pour les lignes synthétiques "Jira · KEY" (espaces Jira sans projet tracker
+  // mappé), on dérive la couleur par hash de l'id pour rester déterministe et
+  // cohérent avec ce qu'affiche DayColumn pour ces mêmes entrées.
+  const colorForRow = (project) => {
+    if (!project.isRemoteGroup) return projectColor(project.id);
+    const seed = (project.id || "")
+      .split("")
+      .reduce((acc, c) => acc + c.charCodeAt(0), 0);
+    return PROJECT_COLORS[seed % PROJECT_COLORS.length];
+  };
+
   return (
     <div
       style={{
@@ -120,7 +131,7 @@ export default function RecapPanel({
 
         {/* Lignes par projet */}
         {recap.map(({ project, perDay, total }) => {
-          const c = projectColor(project.id);
+          const c = colorForRow(project);
           return (
             <Fragment key={project.id}>
               <div
@@ -138,6 +149,9 @@ export default function RecapPanel({
                     borderRadius: "50%",
                     background: c.bg,
                     flexShrink: 0,
+                    ...(project.isRemoteGroup
+                      ? { border: `1px dashed ${c.bg}`, background: "transparent" }
+                      : {}),
                   }}
                 />
                 <span
@@ -146,7 +160,15 @@ export default function RecapPanel({
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                     fontSize: 13,
+                    ...(project.isRemoteGroup
+                      ? { fontStyle: "italic", opacity: 0.85 }
+                      : {}),
                   }}
+                  title={
+                    project.isRemoteGroup
+                      ? "Espace Jira sans projet tracker mappé"
+                      : undefined
+                  }
                 >
                   {project.name}
                 </span>
