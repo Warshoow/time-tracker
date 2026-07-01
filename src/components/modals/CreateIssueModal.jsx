@@ -158,13 +158,19 @@ export default function CreateIssueModal({
   const showSprintField =
     state.issueTypeName && !typeIsEpic && !typeIsStory;
 
-  const canSubmit =
-    state.jiraProjectKey &&
-    state.issueTypeName &&
-    state.summary.trim().length >= 3 &&
-    (!showParentField || state.parentKey) &&
-    // Si une story est sélectionnée, un type de lien doit l'être aussi
-    (!state.linkToStoryKey || state.linkTypeName);
+  // Liste des champs manquants (pour afficher un hint clair sous le bouton
+  // Créer quand il reste disabled). Ordre = pertinence UX.
+  const missingFields = [];
+  if (!state.jiraProjectKey) missingFields.push("espace");
+  if (!state.issueTypeName) missingFields.push("type");
+  if ((state.summary || "").trim().length < 3)
+    missingFields.push("titre (≥ 3 caractères)");
+  if (showParentField && !state.parentKey)
+    missingFields.push("epic parent");
+  if (state.linkToStoryKey && !state.linkTypeName)
+    missingFields.push("type de lien");
+
+  const canSubmit = missingFields.length === 0;
 
   // Crée une nouvelle story inline (sans logger de temps). Au succès, on la
   // sélectionne immédiatement comme story à lier.
@@ -319,9 +325,11 @@ export default function CreateIssueModal({
                   setState((m) => ({
                     ...m,
                     jiraProjectKey: e.target.value,
+                    issueTypeId: "",
                     issueTypeName: "",
                     parentKey: "",
                     linkToStoryKey: "",
+                    linkTypeName: "",
                     sprintId: "",
                   }))
                 }
@@ -709,20 +717,35 @@ export default function CreateIssueModal({
           style={{
             marginTop: 22,
             display: "flex",
-            justifyContent: "flex-end",
+            alignItems: "center",
+            justifyContent: "space-between",
             gap: 8,
           }}
         >
-          <button className="btn" onClick={onClose} disabled={creating}>
-            Annuler
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={submit}
-            disabled={!canSubmit || creating}
+          <div
+            style={{
+              fontSize: 11,
+              color: "#2a262080",
+              minHeight: 16,
+              flex: 1,
+            }}
           >
-            <Plus size={14} /> {creating ? "Création…" : "Créer"}
-          </button>
+            {!canSubmit && missingFields.length > 0 && (
+              <span>Manque : {missingFields.join(", ")}</span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={onClose} disabled={creating}>
+              Annuler
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={submit}
+              disabled={!canSubmit || creating}
+            >
+              <Plus size={14} /> {creating ? "Création…" : "Créer"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
