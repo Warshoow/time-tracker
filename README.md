@@ -1,16 +1,18 @@
-# Carnet de temps
+# Time tracker
 
-Tracker hebdomadaire perso (lun–ven) — projets, entrées horaires, totaux.
-Données stockées en `localStorage` du navigateur.
+A personal weekly time tracker (Monday to Friday): projects, time entries,
+totals. Data is stored in the browser's `localStorage`.
 
-## Lancer
+Live at https://warshoow.github.io/time-tracker/
+
+## Run
 
 ```bash
 npm install
 npm run dev
 ```
 
-Ouvre http://localhost:5173/
+Opens on http://localhost:5173/
 
 ## Build
 
@@ -19,20 +21,18 @@ npm run build
 npm run preview
 ```
 
-## Déploiement GitHub Pages
+## Deploying to GitHub Pages
 
-Le workflow `.github/workflows/deploy.yml` build et déploie automatiquement à chaque push sur `master` (ou `main`).
+The `.github/workflows/deploy.yml` workflow builds and deploys on every push to
+`master` (or `main`).
 
-**Setup en une fois** (sur GitHub) :
-1. Va dans **Settings → Pages**
-2. Sous *Source*, choisis **GitHub Actions**
+One-time setup on GitHub: **Settings → Pages**, and under *Source* pick
+**GitHub Actions**.
 
-Une fois en place, le site est dispo à : https://warshoow.github.io/time-tracker/
-
-Si tu renommes le repo, change la ligne `base` dans `vite.config.js`.
+If you rename the repo, change the `base` line in `vite.config.js`.
 
 ## Stack
 
 - Vite + React 18
-- lucide-react (icônes)
-- Persistance via `localStorage` (clé `tt:state:v1`)
+- lucide-react (icons)
+- Persistence through `localStorage` (key `tt:state:v1`)
